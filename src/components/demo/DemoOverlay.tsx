@@ -6,22 +6,32 @@ import { Button } from '../ui/Button';
 
 const DEMO_STEPS = [
   {
-    title: 'Your Guest List',
+    title: "Who's Coming?",
     description:
-      'Manage your event guests. Add them manually, import from CSV, set RSVP status, dietary needs, and group into households.',
-    highlights: ['Guest table', 'RSVP badges', 'Dietary tags', 'Search & filters'],
+      'Your guest list at a glance — track confirmed, pending, and tentative RSVPs. ' +
+      'Manage dietary needs, accessibility, and household groups.',
+    highlights: ['RSVP tracking', 'Dietary tags', 'Households', 'Search & filters'],
   },
   {
-    title: 'Your Floor Plan',
+    title: 'Design Your Floor Plan',
     description:
-      'Customize your venue layout. Choose a template or build from scratch. Add tables, fixtures, and adjust dimensions.',
-    highlights: ['Room dimensions', 'Table types', 'Fixtures', 'Template gallery'],
+      'Build your venue layout with tables and fixtures. ' +
+      'Pick a template or start from scratch — drag, resize, and snap into place.',
+    highlights: ['Table types', 'Fixtures & decor', 'Room layout', 'Templates'],
   },
   {
-    title: 'Seating Comes Together',
+    title: 'Seating Made Easy',
     description:
-      'Auto-assign places guests respecting households, constraints, and social circles. Drag guests to rearrange.',
-    highlights: ['Auto-assign results', 'Constraints', 'Drag-and-drop', 'Export options'],
+      'Auto-assign seats guests respecting households, constraints, and dietary needs. ' +
+      'Drag to rearrange, then export place cards and floor plans.',
+    highlights: ['Auto-assign', 'Constraints', 'Drag-and-drop', 'Export & print'],
+  },
+  {
+    title: 'Event Day Check-In',
+    description:
+      'On event day, check guests in as they arrive. ' +
+      "See who's here, who's still expected, and find table assignments instantly.",
+    highlights: ['Live check-in', 'Table lookup', 'Arrival tracking', 'Household groups'],
   },
 ];
 

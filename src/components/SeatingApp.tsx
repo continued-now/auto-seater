@@ -48,7 +48,7 @@ export function SeatingApp() {
   }
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-col h-dvh">
       <Header />
       <StepNavigation />
       <main className="flex-1 overflow-hidden relative">
@@ -56,6 +56,7 @@ export function SeatingApp() {
         {currentStep === 'guests' && <GuestListStep />}
         {currentStep === 'venue' && <VenueSetupStep />}
         {currentStep === 'seating' && <SeatingStep />}
+        {currentStep === 'check-in' && isDemoMode && <CheckInStep />}
       </main>
       <DemoOverlay />
     </div>

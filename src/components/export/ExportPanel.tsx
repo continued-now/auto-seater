@@ -118,7 +118,7 @@ export function ExportPanel({ stageRef }: ExportPanelProps) {
         {showDropdown && (
           <>
             <div className="fixed inset-0 z-40" onClick={() => setShowDropdown(false)} />
-            <div className="absolute top-full right-0 mt-1 bg-white rounded-lg shadow-lg border border-slate-200 py-1 min-w-[200px] z-50">
+            <div className="absolute top-full right-0 mt-1 bg-white rounded-lg shadow-lg border border-slate-200 py-1 w-[200px] z-50">
               <button
                 className="w-full px-3 py-2 text-left text-sm hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
                 onClick={() => openDialog('floor-plan')}

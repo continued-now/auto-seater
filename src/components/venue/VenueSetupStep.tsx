@@ -99,15 +99,7 @@ const FIXTURE_TYPES: { type: FixtureType; label: string; icon: React.ElementType
 ];
 
 export function VenueSetupStep() {
-  const _venue = useSeatingStore((s) => s.venue);
-  const venue = useMemo(() => ({
-    ..._venue,
-    guides: _venue.guides ?? [],
-    rooms: _venue.rooms ?? [],
-    walls: _venue.walls ?? [],
-    fixtures: _venue.fixtures ?? [],
-    tables: _venue.tables ?? [],
-  }), [_venue]);
+  const venue = useSeatingStore((s) => s.venue);
   const templates = useSeatingStore((s) => s.templates);
   const selectedElementId = useSeatingStore((s) => s.selectedElementId);
   const selectedElementType = useSeatingStore((s) => s.selectedElementType);
@@ -437,7 +429,7 @@ export function VenueSetupStep() {
                 }`}
               >
                 <span className="font-medium truncate flex-1">Main Room</span>
-                <span className="text-[10px] text-slate-400">{venue.roomWidth}x{venue.roomLength}</span>
+                <span className="text-[10px] text-slate-500">{venue.roomWidth}x{venue.roomLength}</span>
               </button>
 
               {/* Additional rooms */}
@@ -460,11 +452,13 @@ export function VenueSetupStep() {
                         style={{ backgroundColor: room.color }}
                       />
                     )}
-                    <span className="font-medium truncate flex-1">{room.label}</span>
-                    <span className="text-[10px] text-slate-400">{room.width}x{room.height}</span>
+                    <span className="font-medium truncate flex-1" title={room.label}>{room.label}</span>
+                    <span className="text-[10px] text-slate-500">{room.width}x{room.height}</span>
                   </button>
                   <button
-                    onClick={() => deleteRoom(room.id)}
+                    onClick={() => {
+                      if (confirm('Delete this room?')) deleteRoom(room.id);
+                    }}
                     className="text-slate-400 hover:text-red-500 transition-colors cursor-pointer p-0.5"
                   >
                     <X size={12} />
@@ -757,6 +751,7 @@ export function VenueSetupStep() {
                 size="sm"
                 className="lg:hidden shrink-0"
                 onClick={() => setSidebarOpen(true)}
+                aria-label="Toggle sidebar"
               >
                 <Menu size={16} />
               </Button>

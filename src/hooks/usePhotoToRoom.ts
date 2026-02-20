@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import type {
   PhotoSlot,
   PhotoSlotId,
@@ -59,6 +59,13 @@ export function usePhotoToRoom() {
   const [roomPhotos, setRoomPhotos] = useState<CapturedPhoto[]>([]);
 
   const venueUnit = useSeatingStore((s) => s.venue.unit);
+
+  // Cleanup interval on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (statusIntervalRef.current) clearInterval(statusIntervalRef.current);
+    };
+  }, []);
 
   const openWizard = useCallback(() => {
     setStep('mode-select');

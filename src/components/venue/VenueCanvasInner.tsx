@@ -97,9 +97,9 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
   // Compute glow rect behind selected element
   const selectionGlow = useMemo(() => {
     if (!selectedElementId) return null;
+    const pad = 6 / zoom;
     const table = venue.tables.find((t) => t.id === selectedElementId);
     if (table) {
-      const pad = 6;
       return {
         x: table.position.x - table.width / 2 - pad,
         y: table.position.y - table.height / 2 - pad,
@@ -112,7 +112,6 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
     }
     const fixture = venue.fixtures.find((f) => f.id === selectedElementId);
     if (fixture) {
-      const pad = 6;
       return {
         x: fixture.position.x - fixture.width / 2 - pad,
         y: fixture.position.y - fixture.height / 2 - pad,
@@ -124,7 +123,7 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
       };
     }
     return null;
-  }, [selectedElementId, venue.tables, venue.fixtures]);
+  }, [selectedElementId, venue.tables, venue.fixtures, zoom]);
 
   // Attach Transformer to selected element
   useEffect(() => {

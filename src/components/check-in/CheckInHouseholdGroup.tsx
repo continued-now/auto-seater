@@ -46,7 +46,7 @@ export function CheckInHouseholdGroup({ household, members, tables }: CheckInHou
           <span>{household.name}</span>
           <span className="text-xs text-slate-400">({members.length})</span>
         </button>
-        {!allCheckedIn && uncheckedCount > 1 && (
+        {!allCheckedIn && uncheckedCount > 0 && (
           <Button
             variant="ghost"
             size="sm"

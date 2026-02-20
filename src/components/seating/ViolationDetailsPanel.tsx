@@ -46,7 +46,7 @@ export function ViolationDetailsPanel({
   return (
     <div
       ref={panelRef}
-      className="absolute top-12 right-3 z-20 w-80 bg-white rounded-xl border border-slate-200 shadow-xl animate-in fade-in slide-in-from-top-2 duration-150"
+      className="absolute top-12 right-3 z-20 w-[calc(100vw-1.5rem)] sm:w-80 bg-white rounded-xl border border-slate-200 shadow-xl animate-in fade-in slide-in-from-top-2 duration-150"
     >
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-slate-100">
         <h4 className="text-sm font-semibold text-slate-900">

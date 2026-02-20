@@ -35,16 +35,18 @@ interface PreDemoSnapshot {
 let idbTimer: ReturnType<typeof setTimeout> | null = null;
 function debouncedIDBSave(state: SeatingState) {
   if (state.isDemoMode) return;
+  // Capture snapshot immediately to avoid race condition with stale state in timeout
+  const snapshot = {
+    guests: state.guests,
+    households: state.households,
+    socialCircles: state.socialCircles,
+    venue: state.venue,
+    constraints: state.constraints,
+    templates: state.templates,
+  };
   if (idbTimer) clearTimeout(idbTimer);
   idbTimer = setTimeout(() => {
-    saveToIndexedDB('seating-state', {
-      guests: state.guests,
-      households: state.households,
-      socialCircles: state.socialCircles,
-      venue: state.venue,
-      constraints: state.constraints,
-      templates: state.templates,
-    });
+    saveToIndexedDB('seating-state', snapshot);
   }, 2000);
 }
 
@@ -1200,6 +1202,7 @@ export const useSeatingStore = create<SeatingState>()(
             0: 'guests',
             1: 'venue',
             2: 'seating',
+            3: 'check-in',
           };
 
           set((state) => {
@@ -1214,6 +1217,25 @@ export const useSeatingStore = create<SeatingState>()(
             setTimeout(() => {
               if (get().isDemoMode && get().demoStep === 2) {
                 get().autoAssignGuests();
+              }
+            }, 800);
+          }
+
+          if (nextStep === 3) {
+            setTimeout(() => {
+              const s = get();
+              if (s.isDemoMode && s.demoStep === 3) {
+                const confirmed = s.guests.filter((g) => g.rsvpStatus === 'confirmed' && !g.checkedInAt);
+                const toCheckIn = confirmed.slice(0, 5);
+                set((state) => {
+                  for (const guest of toCheckIn) {
+                    const g = state.guests.find((sg) => sg.id === guest.id);
+                    if (g) {
+                      g.checkedInAt = Date.now();
+                      g.checkedInBy = 'demo';
+                    }
+                  }
+                });
               }
             }, 800);
           }
@@ -1291,6 +1313,21 @@ export const useSeatingStore = create<SeatingState>()(
           }
         }
         return state as never;
+      },
+      merge: (persisted, current) => {
+        const merged = { ...current, ...(persisted as object) } as typeof current;
+        // Ensure venue array fields are never undefined after hydration
+        if (merged.venue) {
+          merged.venue = {
+            ...merged.venue,
+            tables: merged.venue.tables ?? [],
+            fixtures: merged.venue.fixtures ?? [],
+            walls: merged.venue.walls ?? [],
+            guides: merged.venue.guides ?? [],
+            rooms: merged.venue.rooms ?? [],
+          };
+        }
+        return merged;
       },
     }
   )

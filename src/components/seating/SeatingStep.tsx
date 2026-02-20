@@ -595,7 +595,7 @@ export function SeatingStep() {
 
             <div className="flex-1" />
 
-            <span className="text-xs text-slate-400">
+            <span className="text-xs text-slate-400 hidden sm:inline">
               {venue.tables.length} table{venue.tables.length !== 1 ? 's' : ''} |{' '}
               {seatedCount}/{guests.length} seated
             </span>
@@ -648,12 +648,12 @@ export function SeatingStep() {
 
         {/* Bottom Action Bar (when guests selected) */}
         {selectedGuestIds.length > 0 && (
-          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-white rounded-xl shadow-lg border border-slate-200 px-4 py-2.5 flex items-center gap-3">
-            <span className="text-sm font-medium text-slate-700">
+          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-white rounded-xl shadow-lg border border-slate-200 px-3 sm:px-4 py-2 sm:py-2.5 flex items-center gap-2 sm:gap-3 max-w-[calc(100vw-2rem)]">
+            <span className="text-xs sm:text-sm font-medium text-slate-700 shrink-0">
               {selectedGuestIds.length} selected
             </span>
 
-            <div className="w-px h-5 bg-slate-200" />
+            <div className="w-px h-5 bg-slate-200 shrink-0" />
 
             {selectedGuestIds.length === 2 && (
               <>
@@ -664,7 +664,7 @@ export function SeatingStep() {
                     onClick={() => handleAddConstraint('must-sit-together')}
                   >
                     <Link size={14} className="text-green-600" />
-                    <span className="ml-1">Together</span>
+                    <span className="ml-1 hidden sm:inline">Together</span>
                   </Button>
                 </Tooltip>
                 <Tooltip content="Must not sit together">
@@ -674,11 +674,11 @@ export function SeatingStep() {
                     onClick={() => handleAddConstraint('must-not-sit-together')}
                   >
                     <Unlink size={14} className="text-red-600" />
-                    <span className="ml-1">Apart</span>
+                    <span className="ml-1 hidden sm:inline">Apart</span>
                   </Button>
                 </Tooltip>
 
-                <div className="w-px h-5 bg-slate-200" />
+                <div className="w-px h-5 bg-slate-200 shrink-0" />
               </>
             )}
 
@@ -690,7 +690,7 @@ export function SeatingStep() {
                 onClick={() => setShowBulkSelect(!showBulkSelect)}
               >
                 <Users size={14} />
-                <span className="ml-1">Assign to table</span>
+                <span className="ml-1 hidden sm:inline">Assign to table</span>
                 <ChevronDown size={12} className="ml-0.5" />
               </Button>
 

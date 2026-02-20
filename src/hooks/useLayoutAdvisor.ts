@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import type { AdvisorMode, EventType, LayoutAdvisorStep, LayoutAdvisorResponse } from '@/types/layout-advisor';
 import type { VenueConfig } from '@/types/venue';
 import { useSeatingStore } from '@/stores/useSeatingStore';
@@ -25,6 +25,13 @@ export function useLayoutAdvisor() {
   const statusIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const guests = useSeatingStore((s) => s.guests);
+
+  // Cleanup interval on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (statusIntervalRef.current) clearInterval(statusIntervalRef.current);
+    };
+  }, []);
 
   const openAdvisor = useCallback(() => {
     setStep('mode-select');

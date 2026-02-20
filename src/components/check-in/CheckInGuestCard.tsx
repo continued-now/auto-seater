@@ -87,6 +87,7 @@ export function CheckInGuestCard({ guest, tableLabel }: CheckInGuestCardProps) {
             onClick={handleUndo}
             className="p-2 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
             title="Undo check-in"
+            aria-label="Undo check-in"
           >
             <Undo2 size={16} />
           </button>

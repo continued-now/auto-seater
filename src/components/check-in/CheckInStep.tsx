@@ -96,7 +96,7 @@ export function CheckInStep() {
 
   if (expectedGuests.length === 0) {
     return (
-      <div className="h-screen flex flex-col bg-slate-50">
+      <div className="h-dvh flex flex-col bg-slate-50">
         <CheckInHeader stats={stats} onExit={handleExit} />
         <div className="flex-1 flex items-center justify-center">
           <CheckInEmptyState type="no-guests" />
@@ -106,7 +106,7 @@ export function CheckInStep() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-slate-50">
+    <div className="h-dvh flex flex-col bg-slate-50">
       <CheckInHeader stats={stats} onExit={handleExit} />
 
       <div className="flex-1 overflow-y-auto">

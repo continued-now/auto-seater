@@ -16,7 +16,7 @@ export function StepNavigation() {
   const isDemoMode = useSeatingStore((s) => s.isDemoMode);
 
   return (
-    <nav className="flex border-b border-border bg-white">
+    <nav className="flex border-b border-border bg-white shrink-0 overflow-x-auto">
       {steps.map((step) => {
         const isActive = currentStep === step.id;
         const Icon = step.icon;
@@ -25,7 +25,7 @@ export function StepNavigation() {
             key={step.id}
             onClick={() => !isDemoMode && setCurrentStep(step.id)}
             disabled={isDemoMode}
-            className={`flex items-center gap-2 px-6 py-3 text-sm font-medium transition-colors border-b-2 ${
+            className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2.5 sm:py-3 text-sm font-medium transition-colors border-b-2 shrink-0 ${
               isDemoMode ? 'cursor-default' : 'cursor-pointer'
             } ${
               isActive
@@ -34,26 +34,27 @@ export function StepNavigation() {
             }`}
           >
             <Icon size={16} />
-            {step.label}
+            <span className="hidden xs:inline sm:inline">{step.label}</span>
           </button>
         );
       })}
 
-      {!isDemoMode && (
-        <div className="ml-auto">
-          <button
-            onClick={() => setCurrentStep('check-in')}
-            className={`flex items-center gap-2 px-6 py-3 text-sm font-medium transition-colors border-b-2 cursor-pointer ${
-              currentStep === 'check-in'
-                ? 'border-cyan-600 text-cyan-700'
-                : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-            }`}
-          >
-            <ClipboardCheck size={16} />
-            Check-In
-          </button>
-        </div>
-      )}
+      <div className="ml-auto shrink-0">
+        <button
+          onClick={() => !isDemoMode && setCurrentStep('check-in')}
+          disabled={isDemoMode}
+          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2.5 sm:py-3 text-sm font-medium transition-colors border-b-2 shrink-0 ${
+            isDemoMode ? 'cursor-default' : 'cursor-pointer'
+          } ${
+            currentStep === 'check-in'
+              ? 'border-cyan-600 text-cyan-700'
+              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+          }`}
+        >
+          <ClipboardCheck size={16} />
+          <span className="hidden xs:inline sm:inline">Check-In</span>
+        </button>
+      </div>
     </nav>
   );
 }

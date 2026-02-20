@@ -97,7 +97,7 @@ export function SeatingStatsPanel({ guests, tables }: SeatingStatsPanelProps) {
 
   // Expanded card
   return (
-    <div className="absolute bottom-3 right-3 z-10 w-[280px] bg-white rounded-xl border border-slate-200 shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-150">
+    <div className="absolute bottom-3 right-3 z-10 w-[calc(100vw-1.5rem)] sm:w-[280px] bg-white rounded-xl border border-slate-200 shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-150">
       {/* Header */}
       <button
         onClick={() => setExpanded(false)}
@@ -140,7 +140,7 @@ export function SeatingStatsPanel({ guests, tables }: SeatingStatsPanelProps) {
         {tables.length > 0 && (
           <div>
             <span className="text-[11px] font-medium text-slate-500 block mb-1.5">Table Occupancy</span>
-            <div className="space-y-1 max-h-28 overflow-y-auto">
+            <div className="space-y-1 max-h-48 overflow-y-auto">
               {tables.map((table) => {
                 const fill = table.capacity > 0 ? table.assignedGuestIds.length / table.capacity : 0;
                 const fillColor =
@@ -163,7 +163,7 @@ export function SeatingStatsPanel({ guests, tables }: SeatingStatsPanelProps) {
                         }}
                       />
                     </div>
-                    <span className="text-[10px] text-slate-400 tabular-nums w-8 text-right shrink-0">
+                    <span className="text-[10px] text-slate-500 tabular-nums w-8 text-right shrink-0">
                       {table.assignedGuestIds.length}/{table.capacity}
                     </span>
                   </div>

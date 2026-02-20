@@ -25,12 +25,16 @@ export function CheckInSearch({ value, onChange }: CheckInSearchProps) {
         inputMode="search"
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape' && value) onChange('');
+        }}
         placeholder="Search by name, email, or phone..."
         className="w-full h-14 rounded-xl border border-slate-200 bg-white pl-12 pr-12 text-base text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-cyan-600 focus:border-transparent shadow-sm"
       />
       {value && (
         <button
           onClick={() => onChange('')}
+          aria-label="Clear search"
           className="absolute right-4 top-1/2 -translate-y-1/2 p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
         >
           <X size={18} />

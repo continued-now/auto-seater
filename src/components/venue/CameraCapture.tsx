@@ -93,7 +93,7 @@ export default function CameraCapture({ onCapture, instruction, allowLensSwitch 
         <button
           onClick={handleCapture}
           disabled={!isActive}
-          className="w-14 h-14 rounded-full border-4 border-slate-300 bg-white hover:bg-slate-100 active:bg-slate-200 transition-colors disabled:opacity-40 flex items-center justify-center"
+          className="w-14 h-14 rounded-full border-4 border-slate-300 bg-white hover:bg-slate-100 active:bg-slate-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center"
           aria-label="Capture photo"
         >
           <div className="w-10 h-10 rounded-full bg-slate-800" />

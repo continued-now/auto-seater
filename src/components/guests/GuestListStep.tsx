@@ -166,17 +166,17 @@ function BulkActionsBar({
   const [rsvpOpen, setRsvpOpen] = useState(false);
 
   return (
-    <div className="flex items-center gap-3 rounded-lg bg-slate-800 px-4 py-2.5 text-white shadow-lg">
-      <span className="text-sm font-medium">{count} selected</span>
-      <div className="h-4 w-px bg-slate-600" />
-      <div className="relative">
+    <div className="flex items-center gap-2 sm:gap-3 rounded-lg bg-slate-800 px-3 sm:px-4 py-2.5 text-white shadow-lg overflow-x-auto">
+      <span className="text-sm font-medium shrink-0">{count} selected</span>
+      <div className="h-4 w-px bg-slate-600 shrink-0" />
+      <div className="relative shrink-0">
         <Button
           variant="ghost"
           size="sm"
           className="text-white hover:bg-slate-700 hover:text-white"
           onClick={() => setRsvpOpen(!rsvpOpen)}
         >
-          Change RSVP
+          <span className="hidden sm:inline">Change </span>RSVP
           <ChevronDown size={14} />
         </Button>
         {rsvpOpen && (
@@ -743,7 +743,7 @@ function GuestDetailPanel({
   const availableCircles = socialCircles.filter((c) => !guest.socialCircleIds.includes(c.id));
 
   return (
-    <div className="fixed inset-y-0 right-0 z-40 w-[420px] max-w-full bg-white border-l border-slate-200 shadow-xl flex flex-col animate-in slide-in-from-right duration-200">
+    <div className="fixed inset-y-0 right-0 z-40 w-full sm:w-[420px] sm:max-w-full bg-white border-l border-slate-200 shadow-xl flex flex-col animate-in slide-in-from-right duration-200">
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
         <h3 className="text-base font-semibold text-slate-900">Guest Details</h3>
@@ -1144,7 +1144,7 @@ export function GuestListStep() {
   return (
     <div className="flex flex-col h-full bg-slate-50">
       {/* Top bar */}
-      <div className="px-6 pt-5 pb-4 bg-white border-b border-slate-200 space-y-4">
+      <div className="px-3 sm:px-6 pt-4 sm:pt-5 pb-3 sm:pb-4 bg-white border-b border-slate-200 space-y-3 sm:space-y-4">
         {/* Title + Actions */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -1167,7 +1167,7 @@ export function GuestListStep() {
 
         {/* Search + Filters */}
         <div className="flex items-end gap-3 flex-wrap">
-          <div className="flex-1 min-w-[220px]">
+          <div className="flex-1 min-w-0">
             <div className="relative">
               <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
@@ -1217,7 +1217,7 @@ export function GuestListStep() {
 
       {/* Bulk actions */}
       {selectedGuestIds.length > 0 && (
-        <div className="px-6 pt-3">
+        <div className="px-3 sm:px-6 pt-3">
           <BulkActionsBar
             count={selectedGuestIds.length}
             onDelete={handleBulkDelete}
@@ -1228,7 +1228,7 @@ export function GuestListStep() {
       )}
 
       {/* Table */}
-      <div className="flex-1 overflow-auto px-6 py-4">
+      <div className="flex-1 overflow-auto px-3 sm:px-6 py-4">
         {filteredGuests.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             {guests.length === 0 ? (
@@ -1273,7 +1273,7 @@ export function GuestListStep() {
                       onSort={handleSort}
                     />
                   </th>
-                  <th className="px-3 py-2.5 text-left">
+                  <th className="px-3 py-2.5 text-left hidden md:table-cell">
                     <span className="text-xs font-medium text-slate-500">Email</span>
                   </th>
                   <th className="px-3 py-2.5 text-left">
@@ -1285,10 +1285,10 @@ export function GuestListStep() {
                       onSort={handleSort}
                     />
                   </th>
-                  <th className="px-3 py-2.5 text-left">
+                  <th className="px-3 py-2.5 text-left hidden lg:table-cell">
                     <span className="text-xs font-medium text-slate-500">Dietary</span>
                   </th>
-                  <th className="px-3 py-2.5 text-left">
+                  <th className="px-3 py-2.5 text-left hidden sm:table-cell">
                     <span className="text-xs font-medium text-slate-500">Table</span>
                   </th>
                   <th className="w-10 px-3 py-2.5" />
@@ -1334,7 +1334,7 @@ export function GuestListStep() {
                           </div>
                         </div>
                       </td>
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-2.5 hidden md:table-cell">
                         <span className="text-sm text-slate-600 truncate block max-w-[180px]">
                           {guest.email || '—'}
                         </span>
@@ -1348,7 +1348,7 @@ export function GuestListStep() {
                           <span className="ml-1">{capitalise(guest.rsvpStatus)}</span>
                         </Badge>
                       </td>
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-2.5 hidden lg:table-cell">
                         <div className="flex flex-wrap gap-1 max-w-[180px]">
                           {guest.dietaryTags.length > 0
                             ? guest.dietaryTags.slice(0, 2).map((tag) => (
@@ -1368,7 +1368,7 @@ export function GuestListStep() {
                           )}
                         </div>
                       </td>
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-2.5 hidden sm:table-cell">
                         {tableLabel ? (
                           <Badge color="#0891B2" bgColor="#CFFAFE">
                             {tableLabel}
