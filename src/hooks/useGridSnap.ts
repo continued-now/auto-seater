@@ -13,7 +13,7 @@ export function useGridSnap() {
 
   const snap = useCallback(
     (value: number): number => {
-      if (!snapToGrid) return value;
+      if (!snapToGrid || gridPixels <= 0) return value;
       return Math.round(value / gridPixels) * gridPixels;
     },
     [snapToGrid, gridPixels]

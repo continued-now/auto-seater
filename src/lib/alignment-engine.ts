@@ -1,4 +1,4 @@
-import type { Table, Fixture, Position } from '@/types/venue';
+import type { Table, Fixture, Position, UserGuide } from '@/types/venue';
 
 export interface ObjectBounds {
   id: string;
@@ -59,7 +59,7 @@ export function getBoundsFromPosition(
   };
 }
 
-interface RoomBounds {
+export interface RoomBounds {
   left: number;
   right: number;
   top: number;
@@ -71,9 +71,12 @@ interface RoomBounds {
 export function computeAlignmentSnap(
   draggingBounds: ObjectBounds,
   otherBounds: ObjectBounds[],
-  roomBounds: RoomBounds,
-  threshold: number
+  roomBounds: RoomBounds | RoomBounds[],
+  threshold: number,
+  userGuides: UserGuide[] = []
 ): AlignmentSnapResult {
+  const allRoomBounds = Array.isArray(roomBounds) ? roomBounds : [roomBounds];
+
   let bestSnapX: { offset: number; distance: number } | null = null;
   let bestSnapY: { offset: number; distance: number } | null = null;
   const guides: AlignmentGuide[] = [];
@@ -107,18 +110,48 @@ export function computeAlignmentSnap(
     );
   }
 
-  // Room center lines
-  const roomCenterBounds: ObjectBounds = {
-    id: '__room__',
-    left: roomBounds.left,
-    right: roomBounds.right,
-    top: roomBounds.top,
-    bottom: roomBounds.bottom,
-    centerX: roomBounds.centerX,
-    centerY: roomBounds.centerY,
-  };
-  targetXLines.push({ value: roomBounds.centerX, type: 'room-center', bounds: roomCenterBounds });
-  targetYLines.push({ value: roomBounds.centerY, type: 'room-center', bounds: roomCenterBounds });
+  // Room center + edge lines for all rooms
+  for (let ri = 0; ri < allRoomBounds.length; ri++) {
+    const rb = allRoomBounds[ri];
+    const roomCenterBounds: ObjectBounds = {
+      id: `__room_${ri}__`,
+      left: rb.left,
+      right: rb.right,
+      top: rb.top,
+      bottom: rb.bottom,
+      centerX: rb.centerX,
+      centerY: rb.centerY,
+    };
+    targetXLines.push(
+      { value: rb.centerX, type: 'room-center', bounds: roomCenterBounds },
+      { value: rb.left, type: 'edge', bounds: roomCenterBounds },
+      { value: rb.right, type: 'edge', bounds: roomCenterBounds }
+    );
+    targetYLines.push(
+      { value: rb.centerY, type: 'room-center', bounds: roomCenterBounds },
+      { value: rb.top, type: 'edge', bounds: roomCenterBounds },
+      { value: rb.bottom, type: 'edge', bounds: roomCenterBounds }
+    );
+  }
+
+  // User-placed guide lines (use first room bounds for extent)
+  const primaryRb = allRoomBounds[0];
+  for (const guide of userGuides) {
+    const guideBounds: ObjectBounds = {
+      id: `__guide_${guide.id}__`,
+      left: guide.axis === 'vertical' ? guide.position : primaryRb.left,
+      right: guide.axis === 'vertical' ? guide.position : primaryRb.right,
+      top: guide.axis === 'horizontal' ? guide.position : primaryRb.top,
+      bottom: guide.axis === 'horizontal' ? guide.position : primaryRb.bottom,
+      centerX: guide.axis === 'vertical' ? guide.position : primaryRb.centerX,
+      centerY: guide.axis === 'horizontal' ? guide.position : primaryRb.centerY,
+    };
+    if (guide.axis === 'vertical') {
+      targetXLines.push({ value: guide.position, type: 'center', bounds: guideBounds });
+    } else {
+      targetYLines.push({ value: guide.position, type: 'center', bounds: guideBounds });
+    }
+  }
 
   // Find best X snap
   for (const dragPoint of dragXPoints) {

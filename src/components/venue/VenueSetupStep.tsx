@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import {
   Circle,
@@ -36,6 +36,10 @@ import {
   Layers,
   Shirt,
   Volume2,
+  ChevronDown,
+  MoveHorizontal,
+  MoveVertical,
+  X,
 } from 'lucide-react';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { Button } from '@/components/ui/Button';
@@ -43,9 +47,11 @@ import { Input } from '@/components/ui/Input';
 import { Tooltip, TooltipProvider } from '@/components/ui/Tooltip';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { Dialog, DialogContent } from '@/components/ui/Dialog';
-import { PREBUILT_TEMPLATES } from '@/lib/venue-templates';
+import { PREBUILT_TEMPLATES, COMMON_FIXTURE_TYPES, TEMPLATE_FIXTURES } from '@/lib/venue-templates';
 import { ProBadge } from '@/components/ui/ProBadge';
 import { useFeatureGate } from '@/hooks/useFeatureGate';
+import { createId } from '@/lib/id';
+import { getAllRoomRects, computeNewRoomPosition, getVenueBoundingBox, getRoomCenter } from '@/lib/room-geometry';
 import type { TableShape, FixtureType } from '@/types/venue';
 
 const VenueCanvasInner = dynamic(
@@ -112,6 +118,12 @@ export function VenueSetupStep() {
   const setSelectedElement = useSeatingStore((s) => s.setSelectedElement);
   const clearSelection = useSeatingStore((s) => s.clearSelection);
   const setCanvasToolMode = useSeatingStore((s) => s.setCanvasToolMode);
+  const activeTemplateId = useSeatingStore((s) => s.activeTemplateId);
+  const addRoom = useSeatingStore((s) => s.addRoom);
+  const updateRoom = useSeatingStore((s) => s.updateRoom);
+  const deleteRoom = useSeatingStore((s) => s.deleteRoom);
+  const selectedRoomId = useSeatingStore((s) => s.selectedRoomId);
+  const setSelectedRoomId = useSeatingStore((s) => s.setSelectedRoomId);
 
   const { canAccess } = useFeatureGate();
   const canCustomDimensions = canAccess('custom-dimensions');
@@ -119,12 +131,40 @@ export function VenueSetupStep() {
   const selectedTable = selectedElementType === 'table' ? venue.tables.find((t) => t.id === selectedElementId) ?? null : null;
   const selectedFixture = selectedElementType === 'fixture' ? venue.fixtures.find((f) => f.id === selectedElementId) ?? null : null;
   const selectedWall = selectedElementType === 'wall' ? venue.walls.find((w) => w.id === selectedElementId) ?? null : null;
+  const selectedRoom = selectedElementType === 'room' ? (venue.rooms ?? []).find((r) => r.id === selectedElementId) ?? null : null;
 
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [templateDesc, setTemplateDesc] = useState('');
   const [templateTab, setTemplateTab] = useState<'prebuilt' | 'saved'>('prebuilt');
+  const [showMoreFixtures, setShowMoreFixtures] = useState(false);
+
+  // Add Room dialog state
+  const [addRoomDialogOpen, setAddRoomDialogOpen] = useState(false);
+  const [newRoomLabel, setNewRoomLabel] = useState('');
+  const [newRoomWidth, setNewRoomWidth] = useState(20);
+  const [newRoomHeight, setNewRoomHeight] = useState(15);
+  const [newRoomAttachTo, setNewRoomAttachTo] = useState('__primary__');
+  const [newRoomEdge, setNewRoomEdge] = useState<'top' | 'right' | 'bottom' | 'left'>('right');
+
+  const pxPerUnit = venue.unit === 'ft' ? 15 : 30;
+  const roomRects = useMemo(() => getAllRoomRects(venue, pxPerUnit), [venue, pxPerUnit]);
+
+  // Split fixtures into primary (common + template-relevant) and secondary (everything else)
+  const { primaryFixtures, secondaryFixtures } = useMemo(() => {
+    const templateSpecific = activeTemplateId ? (TEMPLATE_FIXTURES[activeTemplateId] ?? []) : [];
+    const primaryTypes = new Set([...COMMON_FIXTURE_TYPES, ...templateSpecific]);
+
+    // No template selected — show all fixtures as primary
+    if (!activeTemplateId) {
+      return { primaryFixtures: FIXTURE_TYPES, secondaryFixtures: [] };
+    }
+
+    const primary = FIXTURE_TYPES.filter((f) => primaryTypes.has(f.type));
+    const secondary = FIXTURE_TYPES.filter((f) => !primaryTypes.has(f.type));
+    return { primaryFixtures: primary, secondaryFixtures: secondary };
+  }, [activeTemplateId]);
 
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
@@ -147,40 +187,138 @@ export function VenueSetupStep() {
 
   const handleAddTable = useCallback(
     (shape: TableShape) => {
-      addTable(shape);
+      addTable(shape, selectedRoomId ?? undefined);
     },
-    [addTable]
+    [addTable, selectedRoomId]
   );
 
   const handleAddFixture = useCallback(
     (type: FixtureType, width: number, height: number) => {
+      const pxPerUnit = venue.unit === 'ft' ? 15 : 30;
+      const currentRoomRects = getAllRoomRects(venue, pxPerUnit);
+      const targetRoom = selectedRoomId
+        ? currentRoomRects.find((r) => r.id === selectedRoomId)
+        : currentRoomRects[0];
+      const roomW = targetRoom ? targetRoom.width : venue.roomWidth * pxPerUnit;
+      const roomL = targetRoom ? targetRoom.height : venue.roomLength * pxPerUnit;
+      const roomX = targetRoom ? targetRoom.x : 0;
+      const roomY = targetRoom ? targetRoom.y : 0;
+      const centerX = roomX + roomW / 2;
+      const centerY = roomY + roomL / 2;
+
+      // Count existing fixtures of same type to offset placement
+      const sameTypeCount = venue.fixtures.filter((f) => f.type === type).length;
+      const offset = sameTypeCount * (width + 20);
+
+      let position = { x: centerX, y: centerY };
+      let rotation = 0;
+      let doorStyle: 'swing-in' | 'swing-out' | 'sliding' | 'double' | undefined;
+
+      if (type === 'entrance') {
+        position = { x: Math.min(centerX + offset, roomX + roomW - width / 2), y: roomY + roomL - height / 2 };
+        doorStyle = 'swing-in';
+      } else if (type === 'exit') {
+        position = { x: Math.min(centerX + offset, roomX + roomW - width / 2), y: roomY + height / 2 };
+        doorStyle = 'swing-out';
+      } else if (type === 'door') {
+        position = { x: roomX + width / 2, y: Math.min(centerY + offset, roomY + roomL - height / 2) };
+        doorStyle = 'swing-in';
+      } else if (type === 'restroom') {
+        const inset = 2.5 * (venue.unit === 'ft' ? 15 : 30);
+        position = { x: roomX + roomW - width / 2 - inset, y: roomY + height / 2 + inset };
+      } else if (type === 'window') {
+        position = { x: roomX + roomW - height / 2, y: Math.min(centerY + offset, roomY + roomL - width / 2) };
+        rotation = 90;
+      }
+
       addFixture({
         type,
         label: type,
-        position: { x: 100, y: 100 },
-        rotation: 0,
+        position,
+        rotation,
         width,
         height,
+        doorStyle,
+        roomId: selectedRoomId ?? undefined,
       });
     },
-    [addFixture]
+    [addFixture, venue.unit, venue.roomWidth, venue.roomLength, venue.fixtures, selectedRoomId, venue]
   );
 
   const handleFitToView = useCallback(() => {
     if (!canvasContainerRef.current) return;
     const unit = venue.unit === 'ft' ? 15 : 30;
-    const roomW = venue.roomWidth * unit;
-    const roomH = venue.roomHeight * unit;
+    const currentRoomRects = getAllRoomRects(venue, unit);
+    const bbox = getVenueBoundingBox(currentRoomRects);
+    const totalW = bbox.width || venue.roomWidth * unit;
+    const totalH = bbox.height || venue.roomLength * unit;
     const padded = 40;
-    const scaleX = (canvasSize.width - padded * 2) / roomW;
-    const scaleY = (canvasSize.height - padded * 2) / roomH;
+    const scaleX = (canvasSize.width - padded * 2) / totalW;
+    const scaleY = (canvasSize.height - padded * 2) / totalH;
     const newZoom = Math.min(scaleX, scaleY, 2);
     setZoom(newZoom);
     setPanOffset({
-      x: (canvasSize.width - roomW * newZoom) / 2,
-      y: (canvasSize.height - roomH * newZoom) / 2,
+      x: (canvasSize.width - totalW * newZoom) / 2 - bbox.x * newZoom,
+      y: (canvasSize.height - totalH * newZoom) / 2 - bbox.y * newZoom,
     });
-  }, [venue.roomWidth, venue.roomHeight, venue.unit, canvasSize, setZoom, setPanOffset]);
+  }, [venue, canvasSize, setZoom, setPanOffset]);
+
+  // Auto-center canvas when room dimensions or unit change
+  useEffect(() => {
+    handleFitToView();
+  }, [handleFitToView]);
+
+  const handleAddRoom = useCallback(() => {
+    const label = newRoomLabel.trim() || `Room ${(venue.rooms?.length ?? 0) + 2}`;
+    const currentRoomRects = getAllRoomRects(venue, pxPerUnit);
+    const parentRect = currentRoomRects.find((r) => r.id === newRoomAttachTo) ?? currentRoomRects[0];
+    const newWidthPx = newRoomWidth * pxPerUnit;
+    const newHeightPx = newRoomHeight * pxPerUnit;
+    const pos = computeNewRoomPosition(parentRect, newRoomEdge, newWidthPx, newHeightPx);
+
+    const roomId = addRoom({
+      label,
+      position: pos,
+      width: newRoomWidth,
+      height: newRoomHeight,
+      parentRoomId: newRoomAttachTo,
+      attachEdge: newRoomEdge,
+    });
+
+    // Auto-create a connection door fixture at the shared wall
+    const doorW = 60;
+    const doorH = 20;
+    let doorPos = { x: 0, y: 0 };
+    let doorRotation = 0;
+    if (newRoomEdge === 'top') {
+      doorPos = { x: parentRect.x + parentRect.width / 2, y: parentRect.y };
+    } else if (newRoomEdge === 'bottom') {
+      doorPos = { x: parentRect.x + parentRect.width / 2, y: parentRect.y + parentRect.height };
+    } else if (newRoomEdge === 'left') {
+      doorPos = { x: parentRect.x, y: parentRect.y + parentRect.height / 2 };
+      doorRotation = 90;
+    } else if (newRoomEdge === 'right') {
+      doorPos = { x: parentRect.x + parentRect.width, y: parentRect.y + parentRect.height / 2 };
+      doorRotation = 90;
+    }
+
+    addFixture({
+      type: 'door',
+      label: `Door to ${label}`,
+      position: doorPos,
+      rotation: doorRotation,
+      width: doorW,
+      height: doorH,
+      doorStyle: 'swing-in',
+      roomId,
+    });
+
+    setAddRoomDialogOpen(false);
+    setNewRoomLabel('');
+    setNewRoomWidth(20);
+    setNewRoomHeight(15);
+    setSelectedRoomId(roomId);
+  }, [newRoomLabel, newRoomWidth, newRoomHeight, newRoomAttachTo, newRoomEdge, venue, pxPerUnit, addRoom, addFixture, setSelectedRoomId]);
 
   const handleSaveTemplate = useCallback(() => {
     if (!templateName.trim()) return;
@@ -196,7 +334,6 @@ export function VenueSetupStep() {
         (selectedWall.end.x - selectedWall.start.x) ** 2 + (selectedWall.end.y - selectedWall.start.y) ** 2
       )
     : 0;
-  const pxPerUnit = venue.unit === 'ft' ? 15 : 30;
 
   return (
     <TooltipProvider>
@@ -209,18 +346,18 @@ export function VenueSetupStep() {
               <Input
                 type="number"
                 value={venue.roomWidth}
-                onChange={(e) => updateVenueConfig({ roomWidth: Number(e.target.value) || 1 })}
-                min={1}
+                onChange={(e) => updateVenueConfig({ roomWidth: Math.max(0, Number(e.target.value) || 0) })}
+                min={0}
                 className="w-full"
                 label="Width"
               />
               <Input
                 type="number"
-                value={venue.roomHeight}
-                onChange={(e) => updateVenueConfig({ roomHeight: Number(e.target.value) || 1 })}
-                min={1}
+                value={venue.roomLength}
+                onChange={(e) => updateVenueConfig({ roomLength: Math.max(0, Number(e.target.value) || 0) })}
+                min={0}
                 className="w-full"
-                label="Height"
+                label="Length"
               />
             </div>
             <div className="flex gap-1 mt-2">
@@ -237,6 +374,71 @@ export function VenueSetupStep() {
                 onClick={() => updateVenueConfig({ unit: 'm' })}
               >
                 Metres
+              </Button>
+            </div>
+          </SidebarSection>
+
+          {/* Rooms */}
+          <SidebarSection title="Rooms">
+            <div className="space-y-1.5">
+              {/* Main Room — always first */}
+              <button
+                onClick={() => {
+                  setSelectedRoomId(null);
+                  clearSelection();
+                }}
+                className={`w-full flex items-center gap-2 p-1.5 rounded-lg border text-left text-xs transition-colors cursor-pointer ${
+                  !selectedRoomId
+                    ? 'border-blue-400 bg-blue-50 text-blue-700'
+                    : 'border-border hover:border-blue-300 hover:bg-blue-50 text-slate-600'
+                }`}
+              >
+                <span className="font-medium truncate flex-1">Main Room</span>
+                <span className="text-[10px] text-slate-400">{venue.roomWidth}x{venue.roomLength}</span>
+              </button>
+
+              {/* Additional rooms */}
+              {(venue.rooms ?? []).map((room) => (
+                <div key={room.id} className="flex items-center gap-1">
+                  <button
+                    onClick={() => {
+                      setSelectedRoomId(room.id);
+                      setSelectedElement(room.id, 'room');
+                    }}
+                    className={`flex-1 flex items-center gap-2 p-1.5 rounded-lg border text-left text-xs transition-colors cursor-pointer ${
+                      selectedRoomId === room.id
+                        ? 'border-blue-400 bg-blue-50 text-blue-700'
+                        : 'border-border hover:border-blue-300 hover:bg-blue-50 text-slate-600'
+                    }`}
+                  >
+                    {room.color && (
+                      <span
+                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                        style={{ backgroundColor: room.color }}
+                      />
+                    )}
+                    <span className="font-medium truncate flex-1">{room.label}</span>
+                    <span className="text-[10px] text-slate-400">{room.width}x{room.height}</span>
+                  </button>
+                  <button
+                    onClick={() => deleteRoom(room.id)}
+                    className="text-slate-400 hover:text-red-500 transition-colors cursor-pointer p-0.5"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+
+              <Button
+                variant="secondary"
+                size="sm"
+                className="w-full"
+                onClick={() => {
+                  setNewRoomLabel(`Room ${(venue.rooms?.length ?? 0) + 2}`);
+                  setAddRoomDialogOpen(true);
+                }}
+              >
+                <Plus size={14} /> Add Room
               </Button>
             </div>
           </SidebarSection>
@@ -293,7 +495,7 @@ export function VenueSetupStep() {
           {/* Fixtures */}
           <SidebarSection title="Add Fixtures">
             <div className="grid grid-cols-2 gap-1.5">
-              {FIXTURE_TYPES.map(({ type, label, icon: Icon, width, height }) => (
+              {primaryFixtures.map(({ type, label, icon: Icon, width, height }) => (
                 <Tooltip key={type} content={label} side="bottom">
                   <button
                     onClick={() => handleAddFixture(type, width, height)}
@@ -305,6 +507,35 @@ export function VenueSetupStep() {
                 </Tooltip>
               ))}
             </div>
+            {secondaryFixtures.length > 0 && (
+              <div className="mt-2">
+                <button
+                  onClick={() => setShowMoreFixtures(!showMoreFixtures)}
+                  className="flex items-center gap-1 w-full text-[10px] text-slate-400 hover:text-slate-600 transition-colors py-1 cursor-pointer"
+                >
+                  <ChevronDown
+                    size={12}
+                    className={`transition-transform ${showMoreFixtures ? 'rotate-180' : ''}`}
+                  />
+                  {showMoreFixtures ? 'Show less' : `More fixtures (${secondaryFixtures.length})`}
+                </button>
+                {showMoreFixtures && (
+                  <div className="grid grid-cols-2 gap-1.5 mt-1.5">
+                    {secondaryFixtures.map(({ type, label, icon: Icon, width, height }) => (
+                      <Tooltip key={type} content={label} side="bottom">
+                        <button
+                          onClick={() => handleAddFixture(type, width, height)}
+                          className="flex items-center gap-1.5 p-1.5 rounded-lg border border-border hover:border-blue-300 hover:bg-blue-50 transition-colors text-left cursor-pointer"
+                        >
+                          <Icon size={14} className="text-slate-500 shrink-0" />
+                          <span className="text-[10px] text-slate-500 leading-tight truncate">{label}</span>
+                        </button>
+                      </Tooltip>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </SidebarSection>
 
           {/* Grid controls */}
@@ -346,9 +577,91 @@ export function VenueSetupStep() {
                 type="number"
                 label="Grid Size"
                 value={venue.gridSize}
-                onChange={(e) => updateVenueConfig({ gridSize: Math.max(1, Number(e.target.value) || 1) })}
-                min={1}
+                onChange={(e) => updateVenueConfig({ gridSize: Math.max(0, Number(e.target.value) || 0) })}
+                min={0}
               />
+            </div>
+          </SidebarSection>
+
+          {/* User Guides */}
+          <SidebarSection title="Guides">
+            <div className="space-y-2">
+              <div className="flex gap-1.5">
+                <Tooltip content="Add Horizontal Guide">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => {
+                      const pxPerUnit = venue.unit === 'ft' ? 15 : 30;
+                      const centerY = (venue.roomLength * pxPerUnit) / 2;
+                      updateVenueConfig({
+                        guides: [...venue.guides, { id: createId(), axis: 'horizontal', position: centerY }],
+                      });
+                    }}
+                  >
+                    <MoveHorizontal size={14} /> H-Guide
+                  </Button>
+                </Tooltip>
+                <Tooltip content="Add Vertical Guide">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => {
+                      const pxPerUnit = venue.unit === 'ft' ? 15 : 30;
+                      const centerX = (venue.roomWidth * pxPerUnit) / 2;
+                      updateVenueConfig({
+                        guides: [...venue.guides, { id: createId(), axis: 'vertical', position: centerX }],
+                      });
+                    }}
+                  >
+                    <MoveVertical size={14} /> V-Guide
+                  </Button>
+                </Tooltip>
+              </div>
+              {venue.guides.length > 0 && (
+                <div className="space-y-1">
+                  {venue.guides.map((guide) => {
+                    const pxPerUnit = venue.unit === 'ft' ? 15 : 30;
+                    const posInUnits = Number((guide.position / pxPerUnit).toFixed(1));
+                    return (
+                      <div key={guide.id} className="flex items-center gap-1.5 text-xs">
+                        <span className="text-slate-400 w-4">
+                          {guide.axis === 'horizontal' ? 'H' : 'V'}
+                        </span>
+                        <Input
+                          type="number"
+                          step={0.5}
+                          value={posInUnits}
+                          onChange={(e) => {
+                            const val = Number(e.target.value);
+                            if (!isNaN(val)) {
+                              updateVenueConfig({
+                                guides: venue.guides.map((g) =>
+                                  g.id === guide.id ? { ...g, position: val * pxPerUnit } : g
+                                ),
+                              });
+                            }
+                          }}
+                          className="flex-1"
+                        />
+                        <span className="text-slate-400">{venue.unit}</span>
+                        <button
+                          onClick={() =>
+                            updateVenueConfig({
+                              guides: venue.guides.filter((g) => g.id !== guide.id),
+                            })
+                          }
+                          className="text-slate-400 hover:text-red-500 transition-colors cursor-pointer"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </SidebarSection>
 
@@ -412,7 +725,7 @@ export function VenueSetupStep() {
             </span>
 
             <span className="text-xs text-slate-400 ml-auto">
-              {venue.roomWidth}&times;{venue.roomHeight} {venue.unit}
+              {venue.roomWidth}&times;{venue.roomLength} {venue.unit}
             </span>
           </div>
 
@@ -471,19 +784,19 @@ export function VenueSetupStep() {
                   <Input
                     label="Width"
                     type="number"
-                    min={10}
+                    min={0}
                     value={selectedTable.width}
                     onChange={(e) =>
-                      updateTable(selectedTable.id, { width: Math.max(10, Number(e.target.value) || 10) })
+                      updateTable(selectedTable.id, { width: Math.max(0, Number(e.target.value) || 0) })
                     }
                   />
                   <Input
                     label="Height"
                     type="number"
-                    min={10}
+                    min={0}
                     value={selectedTable.height}
                     onChange={(e) =>
-                      updateTable(selectedTable.id, { height: Math.max(10, Number(e.target.value) || 10) })
+                      updateTable(selectedTable.id, { height: Math.max(0, Number(e.target.value) || 0) })
                     }
                   />
                 </div>
@@ -496,6 +809,7 @@ export function VenueSetupStep() {
                     <Input
                       label={`X (${venue.unit})`}
                       type="number"
+                      min={0}
                       step={0.1}
                       value={Number((selectedTable.position.x / pxPerUnit).toFixed(1))}
                       onChange={(e) => {
@@ -507,6 +821,7 @@ export function VenueSetupStep() {
                     <Input
                       label={`Y (${venue.unit})`}
                       type="number"
+                      min={0}
                       step={0.1}
                       value={Number((selectedTable.position.y / pxPerUnit).toFixed(1))}
                       onChange={(e) => {
@@ -576,19 +891,19 @@ export function VenueSetupStep() {
                   <Input
                     label="Width"
                     type="number"
-                    min={10}
+                    min={0}
                     value={selectedFixture.width}
                     onChange={(e) =>
-                      updateFixture(selectedFixture.id, { width: Math.max(10, Number(e.target.value) || 10) })
+                      updateFixture(selectedFixture.id, { width: Math.max(0, Number(e.target.value) || 0) })
                     }
                   />
                   <Input
                     label="Height"
                     type="number"
-                    min={10}
+                    min={0}
                     value={selectedFixture.height}
                     onChange={(e) =>
-                      updateFixture(selectedFixture.id, { height: Math.max(10, Number(e.target.value) || 10) })
+                      updateFixture(selectedFixture.id, { height: Math.max(0, Number(e.target.value) || 0) })
                     }
                   />
                 </div>
@@ -622,6 +937,35 @@ export function VenueSetupStep() {
                     />
                   </div>
                 </div>
+                {/* Door style selector for entrance/exit/door */}
+                {(selectedFixture.type === 'entrance' || selectedFixture.type === 'exit' || selectedFixture.type === 'door') && (
+                  <div>
+                    <label className="text-xs text-slate-500 block mb-1">Door Style</label>
+                    <div className="grid grid-cols-2 gap-1">
+                      {(['swing-in', 'swing-out', 'sliding', 'double'] as const).map((style) => (
+                        <Button
+                          key={style}
+                          variant={selectedFixture.doorStyle === style ? 'primary' : 'secondary'}
+                          size="sm"
+                          onClick={() => updateFixture(selectedFixture.id, { doorStyle: style })}
+                          className="text-[10px]"
+                        >
+                          {style === 'swing-in' ? 'Swing In' : style === 'swing-out' ? 'Swing Out' : style === 'sliding' ? 'Sliding' : 'Double'}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {/* Check-in point toggle for door types */}
+                {(selectedFixture.type === 'entrance' || selectedFixture.type === 'exit' || selectedFixture.type === 'door') && (
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <Checkbox
+                      checked={selectedFixture.isCheckIn ?? false}
+                      onCheckedChange={(checked) => updateFixture(selectedFixture.id, { isCheckIn: checked })}
+                    />
+                    Check-in Point
+                  </label>
+                )}
                 <div className="text-xs text-slate-400">
                   Type: {selectedFixture.type}
                 </div>
@@ -653,11 +997,11 @@ export function VenueSetupStep() {
                 <Input
                   label="Thickness"
                   type="number"
-                  min={2}
+                  min={0}
                   max={30}
                   value={selectedWall.thickness}
                   onChange={(e) =>
-                    updateWall(selectedWall.id, { thickness: Math.max(2, Number(e.target.value) || 8) })
+                    updateWall(selectedWall.id, { thickness: Math.max(0, Number(e.target.value) || 0) })
                   }
                 />
                 <div>
@@ -699,6 +1043,134 @@ export function VenueSetupStep() {
             </SidebarSection>
           </div>
         )}
+
+        {/* Room properties panel */}
+        {selectedRoom && (
+          <div className="w-60 border-l border-border bg-white flex flex-col overflow-y-auto shrink-0">
+            <SidebarSection title="Selected Room">
+              <div className="space-y-3">
+                <Input
+                  label="Label"
+                  value={selectedRoom.label}
+                  onChange={(e) => updateRoom(selectedRoom.id, { label: e.target.value })}
+                />
+                <div className="flex gap-2">
+                  <Input
+                    label={`Width (${venue.unit})`}
+                    type="number"
+                    min={5}
+                    value={selectedRoom.width}
+                    onChange={(e) =>
+                      updateRoom(selectedRoom.id, { width: Math.max(5, Number(e.target.value) || 5) })
+                    }
+                  />
+                  <Input
+                    label={`Height (${venue.unit})`}
+                    type="number"
+                    min={5}
+                    value={selectedRoom.height}
+                    onChange={(e) =>
+                      updateRoom(selectedRoom.id, { height: Math.max(5, Number(e.target.value) || 5) })
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 block mb-1">Color (optional)</label>
+                  <div className="flex gap-1.5">
+                    {['#e8f0fe', '#fef3c7', '#dcfce7', '#fce7f3', '#e0e7ff', undefined].map((color, i) => (
+                      <button
+                        key={i}
+                        onClick={() => updateRoom(selectedRoom.id, { color })}
+                        className={`w-6 h-6 rounded-full border-2 cursor-pointer ${
+                          selectedRoom.color === color ? 'border-blue-500' : 'border-slate-200'
+                        }`}
+                        style={{ backgroundColor: color ?? '#ffffff' }}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => {
+                    deleteRoom(selectedRoom.id);
+                    clearSelection();
+                  }}
+                >
+                  <Trash2 size={14} /> Delete Room
+                </Button>
+              </div>
+            </SidebarSection>
+          </div>
+        )}
+
+        {/* Add Room dialog */}
+        <Dialog open={addRoomDialogOpen} onOpenChange={setAddRoomDialogOpen}>
+          <DialogContent title="Add Room" description="Add a new room extending from an existing room wall.">
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500 block mb-1">Attach to</label>
+                <select
+                  value={newRoomAttachTo}
+                  onChange={(e) => setNewRoomAttachTo(e.target.value)}
+                  className="w-full border border-border rounded-md px-2 py-1.5 text-sm"
+                >
+                  <option value="__primary__">Main Room</option>
+                  {(venue.rooms ?? []).map((r) => (
+                    <option key={r.id} value={r.id}>{r.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 block mb-1">Edge</label>
+                <div className="grid grid-cols-4 gap-1">
+                  {(['top', 'right', 'bottom', 'left'] as const).map((edge) => (
+                    <Button
+                      key={edge}
+                      variant={newRoomEdge === edge ? 'primary' : 'secondary'}
+                      size="sm"
+                      onClick={() => setNewRoomEdge(edge)}
+                      className="capitalize"
+                    >
+                      {edge}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+              <Input
+                label="Label"
+                value={newRoomLabel}
+                onChange={(e) => setNewRoomLabel(e.target.value)}
+                placeholder="e.g. Lobby"
+              />
+              <div className="flex gap-2">
+                <Input
+                  label={`Width (${venue.unit})`}
+                  type="number"
+                  min={5}
+                  value={newRoomWidth}
+                  onChange={(e) => setNewRoomWidth(Math.max(5, Number(e.target.value) || 5))}
+                />
+                <Input
+                  label={`Height (${venue.unit})`}
+                  type="number"
+                  min={5}
+                  value={newRoomHeight}
+                  onChange={(e) => setNewRoomHeight(Math.max(5, Number(e.target.value) || 5))}
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="secondary" size="sm" onClick={() => setAddRoomDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button variant="primary" size="sm" onClick={handleAddRoom}>
+                  <Plus size={14} /> Add Room
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {/* Save template dialog */}
         <Dialog open={saveDialogOpen} onOpenChange={setSaveDialogOpen}>

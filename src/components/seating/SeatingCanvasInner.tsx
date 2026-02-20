@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useCallback, useState } from 'react';
+import { useMemo, useCallback, useState, useRef } from 'react';
 import { Stage, Layer, Rect, Circle, Group, Line, Text } from 'react-konva';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { useCanvasInteraction } from '@/hooks/useCanvasInteraction';
@@ -8,6 +8,7 @@ import { getSeatPositions, SEAT_RENDER_RADIUS } from '@/lib/table-geometry';
 import { validateConstraints } from '@/lib/constraint-validator';
 import type { Table } from '@/types/venue';
 import type { Guest } from '@/types/guest';
+import { getAllRoomRects, getVenueBoundingBox } from '@/lib/room-geometry';
 import type { SeatPosition } from '@/types/seating';
 import type Konva from 'konva';
 
@@ -22,6 +23,8 @@ const COLOURS = {
   seatOccupied: { fill: '#DBEAFE', stroke: '#2563EB' },
   seatDropValid: { fill: '#DCFCE7', stroke: '#16A34A' },
   seatDropInvalid: { fill: '#FEE2E2', stroke: '#DC2626' },
+  seatDragSource: { fill: '#FEF3C7', stroke: '#D97706' },
+  seatSwapTarget: { fill: '#E0E7FF', stroke: '#4F46E5' },
   tableFill: '#f8fafc',
   tableStroke: '#94a3b8',
   constraintTogether: '#16A34A',
@@ -30,12 +33,25 @@ const COLOURS = {
   gridLine: '#e2e8f0',
   warningBg: '#FEF3C7',
   warningStroke: '#D97706',
+  ghostFill: '#DBEAFE',
+  ghostStroke: '#2563EB',
 } as const;
+
+interface SeatDragState {
+  guestId: string;
+  guestName: string;
+  sourceTableId: string;
+  sourceSeatIdx: number;
+  canvasX: number;
+  canvasY: number;
+}
 
 export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingCanvasInnerProps) {
   const guests = useSeatingStore((s) => s.guests);
   const venue = useSeatingStore((s) => s.venue);
   const constraints = useSeatingStore((s) => s.constraints);
+  const assignGuestToTable = useSeatingStore((s) => s.assignGuestToTable);
+  const swapGuests = useSeatingStore((s) => s.swapGuests);
   const unassignGuest = useSeatingStore((s) => s.unassignGuest);
   const selectedGuestIds = useSeatingStore((s) => s.selectedGuestIds);
   const setSelectedGuestIds = useSeatingStore((s) => s.setSelectedGuestIds);
@@ -52,6 +68,9 @@ export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingC
   } | null>(null);
 
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 });
+  const [seatDrag, setSeatDrag] = useState<SeatDragState | null>(null);
+  const seatDragRef = useRef<SeatDragState | null>(null);
+  const didDragMove = useRef(false);
 
   // Build guest lookup map
   const guestMap = useMemo(() => {
@@ -94,31 +113,90 @@ export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingC
       }
     });
     ro.observe(node);
-    // Set initial size
     const rect = node.getBoundingClientRect();
     setStageSize({ width: rect.width, height: rect.height });
   }, []);
 
-  // Draw grid lines
+  const seatingPxPerUnit = venue.unit === 'ft' ? 15 : 30;
+  const roomRects = useMemo(
+    () => getAllRoomRects(venue, seatingPxPerUnit),
+    [venue, seatingPxPerUnit]
+  );
+
+  // Draw grid lines for all rooms
   const gridLines = useMemo(() => {
     const lines: { points: number[]; key: string }[] = [];
-    const gridPixels = venue.gridSize * (venue.unit === 'ft' ? 15 : 30);
+    const gridPixels = venue.gridSize * seatingPxPerUnit;
     if (!venue.showGrid || gridPixels <= 0) return lines;
 
-    const rw = venue.roomWidth * (venue.unit === 'ft' ? 15 : 30);
-    const rh = venue.roomHeight * (venue.unit === 'ft' ? 15 : 30);
-
-    for (let x = 0; x <= rw; x += gridPixels) {
-      lines.push({ points: [x, 0, x, rh], key: `gv-${x}` });
-    }
-    for (let y = 0; y <= rh; y += gridPixels) {
-      lines.push({ points: [0, y, rw, y], key: `gh-${y}` });
+    for (const room of roomRects) {
+      const rx = room.x;
+      const ry = room.y;
+      const rw = room.width;
+      const rh = room.height;
+      for (let x = 0; x <= rw; x += gridPixels) {
+        lines.push({ points: [rx + x, ry, rx + x, ry + rh], key: `gv-${room.id}-${x}` });
+      }
+      for (let y = 0; y <= rh; y += gridPixels) {
+        lines.push({ points: [rx, ry + y, rx + rw, ry + y], key: `gh-${room.id}-${y}` });
+      }
     }
     return lines;
-  }, [venue.showGrid, venue.gridSize, venue.unit, venue.roomWidth, venue.roomHeight]);
+  }, [venue.showGrid, venue.gridSize, seatingPxPerUnit, roomRects]);
 
-  const roomPixelWidth = venue.roomWidth * (venue.unit === 'ft' ? 15 : 30);
-  const roomPixelHeight = venue.roomHeight * (venue.unit === 'ft' ? 15 : 30);
+  const roomPixelWidth = venue.roomWidth * seatingPxPerUnit;
+  const roomPixelLength = venue.roomLength * seatingPxPerUnit;
+
+  // Pre-compute all seat positions in canvas (absolute) coords for drop target detection
+  const allSeats = useMemo(() => {
+    const result: {
+      tableId: string;
+      seatIdx: number;
+      canvasX: number;
+      canvasY: number;
+      occupantId: string | null;
+    }[] = [];
+    for (const table of venue.tables) {
+      const seats = getSeatPositions(table.shape, table.capacity, table.width, table.height);
+      const tableOcc = seatOccupants.get(table.id);
+      for (let i = 0; i < seats.length; i++) {
+        const occupant = tableOcc?.get(i);
+        result.push({
+          tableId: table.id,
+          seatIdx: i,
+          canvasX: table.position.x + seats[i].x,
+          canvasY: table.position.y + seats[i].y,
+          occupantId: occupant?.id ?? null,
+        });
+      }
+    }
+    return result;
+  }, [venue.tables, seatOccupants]);
+
+  // Find closest seat to a canvas position
+  const findNearestSeat = useCallback(
+    (cx: number, cy: number, excludeGuestId?: string) => {
+      let bestDist = Infinity;
+      let bestSeat: (typeof allSeats)[0] | null = null;
+      for (const seat of allSeats) {
+        const dist = Math.hypot(cx - seat.canvasX, cy - seat.canvasY);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestSeat = seat;
+        }
+      }
+      const maxDist = 60;
+      if (bestSeat && bestDist < maxDist) return { seat: bestSeat, dist: bestDist };
+      return null;
+    },
+    [allSeats]
+  );
+
+  // Nearest target seat during drag (for highlighting)
+  const dragTargetSeat = useMemo(() => {
+    if (!seatDrag) return null;
+    return findNearestSeat(seatDrag.canvasX, seatDrag.canvasY, seatDrag.guestId);
+  }, [seatDrag, findNearestSeat]);
 
   // Constraint lines between guest pairs
   const constraintLines = useMemo(() => {
@@ -168,9 +246,107 @@ export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingC
     return lines;
   }, [showConstraints, constraints, guestMap, venue.tables]);
 
-  // Handle click on occupied seat
+  // --- Seat drag-and-drop handlers ---
+  const handleSeatDragStart = useCallback(
+    (guestId: string, guestName: string, tableId: string, seatIdx: number, e: Konva.KonvaEventObject<MouseEvent>) => {
+      e.cancelBubble = true;
+      const stage = e.target.getStage();
+      if (!stage) return;
+      const pointer = stage.getPointerPosition();
+      if (!pointer) return;
+
+      const canvasX = (pointer.x - panOffset.x) / zoom;
+      const canvasY = (pointer.y - panOffset.y) / zoom;
+
+      const state: SeatDragState = {
+        guestId,
+        guestName,
+        sourceTableId: tableId,
+        sourceSeatIdx: seatIdx,
+        canvasX,
+        canvasY,
+      };
+      seatDragRef.current = state;
+      didDragMove.current = false;
+      setSeatDrag(state);
+      setContextMenu(null);
+    },
+    [panOffset, zoom]
+  );
+
+  const handleStageMoveForDrag = useCallback(
+    (e: Konva.KonvaEventObject<MouseEvent>) => {
+      if (!seatDragRef.current) return;
+      didDragMove.current = true;
+      const stage = e.target.getStage();
+      if (!stage) return;
+      const pointer = stage.getPointerPosition();
+      if (!pointer) return;
+
+      const canvasX = (pointer.x - panOffset.x) / zoom;
+      const canvasY = (pointer.y - panOffset.y) / zoom;
+
+      const updated = { ...seatDragRef.current, canvasX, canvasY };
+      seatDragRef.current = updated;
+      setSeatDrag(updated);
+    },
+    [panOffset, zoom]
+  );
+
+  const handleStageUpForDrag = useCallback(() => {
+    const drag = seatDragRef.current;
+    if (!drag) return;
+
+    const target = findNearestSeat(drag.canvasX, drag.canvasY, drag.guestId);
+
+    if (target) {
+      const { seat } = target;
+      // Dropping on the same seat — do nothing
+      if (seat.tableId === drag.sourceTableId && seat.seatIdx === drag.sourceSeatIdx) {
+        // noop
+      } else if (seat.occupantId && seat.occupantId !== drag.guestId) {
+        // Occupied by someone else — swap
+        swapGuests(drag.guestId, seat.occupantId);
+      } else {
+        // Empty seat — move guest there
+        assignGuestToTable(drag.guestId, seat.tableId, seat.seatIdx);
+      }
+    }
+
+    seatDragRef.current = null;
+    setSeatDrag(null);
+  }, [findNearestSeat, swapGuests, assignGuestToTable]);
+
+  // Combined mouse handlers (seat drag takes priority over pan)
+  const handleCombinedMouseMove = useCallback(
+    (e: Konva.KonvaEventObject<MouseEvent>) => {
+      if (seatDragRef.current) {
+        handleStageMoveForDrag(e);
+      } else {
+        handleMouseMove(e);
+      }
+    },
+    [handleStageMoveForDrag, handleMouseMove]
+  );
+
+  const handleCombinedMouseUp = useCallback(
+    (e: Konva.KonvaEventObject<MouseEvent>) => {
+      if (seatDragRef.current) {
+        handleStageUpForDrag();
+      }
+      handleMouseUp();
+    },
+    [handleStageUpForDrag, handleMouseUp]
+  );
+
+  // Handle click on occupied seat (context menu)
   const handleSeatClick = useCallback(
     (guestId: string, stageX: number, stageY: number) => {
+      // Don't show menu if we were dragging
+      if (seatDragRef.current || didDragMove.current) {
+        didDragMove.current = false;
+        return;
+      }
       setContextMenu({ guestId, x: stageX, y: stageY });
     },
     []
@@ -178,14 +354,11 @@ export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingC
 
   const handleStageClick = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent>) => {
-      // Close context menu when clicking empty space
       if (contextMenu) {
         setContextMenu(null);
       }
-      // Deselect table when clicking empty space
       const target = e.target;
       if (target === e.currentTarget || target.getClassName() === 'Rect') {
-        // Check if target is the room bg or stage
         const name = target.name();
         if (name === 'room-bg' || name === 'stage-bg') {
           setSelectedTableId(null);
@@ -202,7 +375,7 @@ export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingC
       const isFull = (tableOccupants?.size ?? 0) >= table.capacity;
       const hasViolation = violatedTableIds.has(table.id);
       const isSelected = selectedTableId === table.id;
-      const isDragging = !!draggedGuestId;
+      const isDraggingFromList = !!draggedGuestId;
 
       return (
         <Group
@@ -248,13 +421,39 @@ export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingC
           {/* Seats */}
           {seats.map((seat, idx) => {
             const occupant = tableOccupants?.get(idx);
+            const isSourceSeat =
+              seatDrag?.sourceTableId === table.id && seatDrag?.sourceSeatIdx === idx;
+            const isDropTarget =
+              dragTargetSeat?.seat.tableId === table.id &&
+              dragTargetSeat?.seat.seatIdx === idx &&
+              !!seatDrag;
+
             let seatFill: string;
             let seatStroke: string;
+            let strokeWidth = 1.5;
 
-            if (isDragging && !occupant && !isFull) {
+            if (isSourceSeat) {
+              // The seat being dragged from — show as dimmed
+              seatFill = COLOURS.seatDragSource.fill;
+              seatStroke = COLOURS.seatDragSource.stroke;
+              strokeWidth = 2;
+            } else if (isDropTarget) {
+              // Potential drop target
+              if (occupant && occupant.id !== seatDrag?.guestId) {
+                // Swap target
+                seatFill = COLOURS.seatSwapTarget.fill;
+                seatStroke = COLOURS.seatSwapTarget.stroke;
+                strokeWidth = 2.5;
+              } else {
+                // Empty target
+                seatFill = COLOURS.seatDropValid.fill;
+                seatStroke = COLOURS.seatDropValid.stroke;
+                strokeWidth = 2.5;
+              }
+            } else if (isDraggingFromList && !occupant && !isFull) {
               seatFill = COLOURS.seatDropValid.fill;
               seatStroke = COLOURS.seatDropValid.stroke;
-            } else if (isDragging && isFull && !occupant) {
+            } else if (isDraggingFromList && isFull && !occupant) {
               seatFill = COLOURS.seatDropInvalid.fill;
               seatStroke = COLOURS.seatDropInvalid.stroke;
             } else if (occupant) {
@@ -266,7 +465,7 @@ export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingC
             }
 
             // Highlight if guest is selected
-            if (occupant && selectedGuestIds.includes(occupant.id)) {
+            if (occupant && selectedGuestIds.includes(occupant.id) && !isSourceSeat && !isDropTarget) {
               seatStroke = '#2563EB';
             }
 
@@ -279,9 +478,20 @@ export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingC
                   radius={SEAT_RENDER_RADIUS}
                   fill={seatFill}
                   stroke={seatStroke}
-                  strokeWidth={occupant && selectedGuestIds.includes(occupant.id) ? 2 : 1.5}
+                  strokeWidth={strokeWidth}
+                  onMouseDown={(e) => {
+                    if (occupant && e.evt.button === 0) {
+                      handleSeatDragStart(
+                        occupant.id,
+                        occupant.name,
+                        table.id,
+                        idx,
+                        e
+                      );
+                    }
+                  }}
                   onClick={() => {
-                    if (occupant) {
+                    if (occupant && !seatDragRef.current) {
                       handleSeatClick(
                         occupant.id,
                         table.position.x + seat.x,
@@ -291,7 +501,9 @@ export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingC
                   }}
                   onMouseEnter={(e) => {
                     const container = e.target.getStage()?.container();
-                    if (container) container.style.cursor = occupant ? 'pointer' : 'default';
+                    if (container) {
+                      container.style.cursor = occupant ? 'grab' : 'default';
+                    }
                   }}
                   onMouseLeave={(e) => {
                     const container = e.target.getStage()?.container();
@@ -299,7 +511,7 @@ export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingC
                   }}
                 />
                 {/* Guest name */}
-                {occupant && (
+                {occupant && !isSourceSeat && (
                   <Text
                     text={firstName}
                     x={-SEAT_RENDER_RADIUS}
@@ -343,6 +555,9 @@ export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingC
       selectedGuestIds,
       setSelectedTableId,
       handleSeatClick,
+      handleSeatDragStart,
+      seatDrag,
+      dragTargetSeat,
     ]
   );
 
@@ -357,23 +572,41 @@ export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingC
         y={panOffset.y}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
+        onMouseMove={handleCombinedMouseMove}
+        onMouseUp={handleCombinedMouseUp}
         onClick={handleStageClick}
       >
         {/* Background layer */}
         <Layer>
-          {/* Room boundary */}
-          <Rect
-            name="room-bg"
-            x={0}
-            y={0}
-            width={roomPixelWidth}
-            height={roomPixelHeight}
-            fill={COLOURS.roomBg}
-            stroke="#cbd5e1"
-            strokeWidth={1}
-          />
+          {/* Room backgrounds */}
+          {roomRects.map((room, idx) => (
+            <Rect
+              key={`room-bg-${room.id}`}
+              name={idx === 0 ? 'room-bg' : undefined}
+              x={room.x}
+              y={room.y}
+              width={room.width}
+              height={room.height}
+              fill={room.color ?? COLOURS.roomBg}
+              stroke="#cbd5e1"
+              strokeWidth={1}
+              dash={idx > 0 ? [8, 4] : undefined}
+            />
+          ))}
+
+          {/* Room labels for additional rooms */}
+          {roomRects.slice(1).map((room) => (
+            <Text
+              key={`label-${room.id}`}
+              text={room.label}
+              x={room.x + 6}
+              y={room.y + 4}
+              fontSize={10}
+              fontFamily="system-ui, sans-serif"
+              fill="#64748b"
+              listening={false}
+            />
+          ))}
 
           {/* Grid */}
           {gridLines.map((line) => (
@@ -409,8 +642,50 @@ export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingC
           </Layer>
         )}
 
+        {/* Drag ghost layer */}
+        {seatDrag && (
+          <Layer listening={false}>
+            {/* Ghost circle following cursor */}
+            <Circle
+              x={seatDrag.canvasX}
+              y={seatDrag.canvasY}
+              radius={SEAT_RENDER_RADIUS + 2}
+              fill={COLOURS.ghostFill}
+              stroke={COLOURS.ghostStroke}
+              strokeWidth={2}
+              opacity={0.8}
+              listening={false}
+            />
+            {/* Ghost name label */}
+            <Text
+              text={seatDrag.guestName.split(' ')[0]}
+              x={seatDrag.canvasX - SEAT_RENDER_RADIUS - 4}
+              y={seatDrag.canvasY - SEAT_RENDER_RADIUS - 14}
+              width={(SEAT_RENDER_RADIUS + 4) * 2}
+              align="center"
+              fontSize={9}
+              fontStyle="600"
+              fill={COLOURS.ghostStroke}
+              listening={false}
+            />
+            {/* Drop hint */}
+            {dragTargetSeat && (
+              <Group x={dragTargetSeat.seat.canvasX} y={dragTargetSeat.seat.canvasY}>
+                <Circle
+                  radius={SEAT_RENDER_RADIUS + 6}
+                  fill="transparent"
+                  stroke={dragTargetSeat.seat.occupantId ? COLOURS.seatSwapTarget.stroke : COLOURS.seatDropValid.stroke}
+                  strokeWidth={2}
+                  dash={[4, 3]}
+                  listening={false}
+                />
+              </Group>
+            )}
+          </Layer>
+        )}
+
         {/* Context menu layer */}
-        {contextMenu && (
+        {contextMenu && !seatDrag && (
           <Layer>
             <Group x={contextMenu.x + 16} y={contextMenu.y - 16}>
               {/* Menu background */}

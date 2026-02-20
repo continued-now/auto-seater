@@ -20,10 +20,10 @@ import {
   ArrowUpDown,
   Home,
   CircleDot,
-  Mail,
-  Phone,
-  StickyNote,
   AlertTriangle,
+  Download,
+  Type,
+  ClipboardPaste,
 } from 'lucide-react';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { useCSVImport } from '@/hooks/useCSVImport';
@@ -34,6 +34,7 @@ import { Checkbox } from '@/components/ui/Checkbox';
 import { Dialog, DialogContent } from '@/components/ui/Dialog';
 import { Select } from '@/components/ui/Select';
 import { rsvpStatusColors, dietaryTagColors, socialCircleColors } from '@/lib/colour-palette';
+import { downloadCSVTemplate } from '@/lib/csv-template';
 import type {
   Guest,
   RSVPStatus,
@@ -211,9 +212,19 @@ function BulkActionsBar({
   );
 }
 
-// ─── Add Guest Dialog ────────────────────────────────────────────────────────
+// ─── Tab types ───────────────────────────────────────────────────────────────
 
-function AddGuestDialog({
+type AddGuestsTab = 'quick-add' | 'paste-csv' | 'upload-file';
+
+const ADD_GUESTS_TABS: { value: AddGuestsTab; label: string; icon: typeof Plus }[] = [
+  { value: 'quick-add', label: 'Quick Add', icon: Type },
+  { value: 'paste-csv', label: 'Paste CSV', icon: ClipboardPaste },
+  { value: 'upload-file', label: 'Upload File', icon: Upload },
+];
+
+// ─── Unified Add Guests Dialog ──────────────────────────────────────────────
+
+function AddGuestsDialog({
   open,
   onOpenChange,
 }: {
@@ -221,216 +232,356 @@ function AddGuestDialog({
   onOpenChange: (v: boolean) => void;
 }) {
   const addGuest = useSeatingStore((s) => s.addGuest);
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [rsvp, setRsvp] = useState<RSVPStatus>('pending');
-  const [notes, setNotes] = useState('');
-
-  const handleSubmit = () => {
-    if (!name.trim()) return;
-    addGuest({
-      name: name.trim(),
-      email: email.trim(),
-      phone: phone.trim(),
-      rsvpStatus: rsvp,
-      dietaryTags: [],
-      accessibilityTags: [],
-      notes: notes.trim(),
-    });
-    setName('');
-    setEmail('');
-    setPhone('');
-    setRsvp('pending');
-    setNotes('');
-    onOpenChange(false);
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="Add Guest" description="Add a new guest to your list.">
-        <div className="flex flex-col gap-3">
-          <Input label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" />
-          <Input label="Email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email@example.com" />
-          <Input label="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+1 (555) 000-0000" />
-          <Select
-            label="RSVP Status"
-            options={RSVP_OPTIONS}
-            value={rsvp}
-            onChange={(e) => setRsvp(e.target.value as RSVPStatus)}
-          />
-          <Input label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Any notes..." />
-          <div className="flex justify-end gap-2 mt-2">
-            <Button variant="secondary" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleSubmit} disabled={!name.trim()}>
-              <Plus size={14} />
-              Add Guest
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ─── CSV Import Dialog ───────────────────────────────────────────────────────
-
-function CSVImportDialog({
-  open,
-  onOpenChange,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-}) {
   const csv = useCSVImport();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [tab, setTab] = useState<AddGuestsTab>('quick-add');
+  const [quickText, setQuickText] = useState('');
+  const [pasteText, setPasteText] = useState('');
+  const [dragging, setDragging] = useState(false);
+  const [quickAddDone, setQuickAddDone] = useState<number | null>(null);
+  const dragCounter = useRef(0);
+
+  const quickNames = quickText
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
   const handleClose = () => {
     csv.reset();
+    setQuickText('');
+    setPasteText('');
+    setTab('quick-add');
+    setQuickAddDone(null);
     onOpenChange(false);
   };
 
+  const handleBack = () => {
+    csv.reset();
+    setPasteText('');
+    setQuickAddDone(null);
+  };
+
+  const handleQuickAdd = () => {
+    if (quickNames.length === 0) return;
+    for (const name of quickNames) {
+      addGuest({
+        name,
+        email: '',
+        phone: '',
+        rsvpStatus: 'pending',
+        dietaryTags: [],
+        accessibilityTags: [],
+        notes: '',
+      });
+    }
+    const count = quickNames.length;
+    setQuickText('');
+    setQuickAddDone(count);
+  };
+
+  const handlePasteCSV = () => {
+    if (!pasteText.trim()) return;
+    csv.handleText(pasteText.trim());
+  };
+
+  // Drag-and-drop handlers
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current++;
+    setDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current--;
+    if (dragCounter.current === 0) setDragging(false);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current = 0;
+    setDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file && file.name.endsWith('.csv')) {
+      setTab('upload-file');
+      csv.handleFile(file);
+    }
+  };
+
+  const isIdle = csv.step === 'idle' && quickAddDone === null;
+
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent title="Import from CSV" description="Upload a CSV file to import guests." className="max-w-2xl">
-        {/* Step: Idle — file upload */}
-        {csv.step === 'idle' && (
-          <div className="flex flex-col items-center gap-4 py-8">
-            <div className="rounded-full bg-blue-50 p-4">
-              <FileSpreadsheet size={32} className="text-blue-600" />
+      <DialogContent
+        title="Add Guests"
+        description="Add guests by name, paste CSV data, or upload a file."
+        className="max-w-2xl"
+      >
+        <div
+          className="relative"
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+        >
+          {/* Drag overlay */}
+          {dragging && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center rounded-lg border-2 border-dashed border-blue-400 bg-blue-50/80">
+              <div className="flex flex-col items-center gap-2">
+                <FileSpreadsheet size={32} className="text-blue-600" />
+                <p className="text-sm font-medium text-blue-700">Drop CSV file here</p>
+              </div>
             </div>
-            <p className="text-sm text-slate-500 text-center">
-              Upload a CSV file with guest information. Column headers will be auto-detected.
-            </p>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) csv.handleFile(file);
-              }}
-            />
-            <Button onClick={() => fileInputRef.current?.click()}>
-              <Upload size={14} />
-              Choose CSV File
-            </Button>
-            {csv.error && (
-              <p className="text-sm text-red-600">{csv.error}</p>
-            )}
-          </div>
-        )}
+          )}
 
-        {/* Step: Mapping */}
-        {csv.step === 'mapping' && csv.csvResult && (
-          <div className="flex flex-col gap-4">
-            <p className="text-sm text-slate-600">
-              Found <span className="font-semibold">{csv.csvResult.rowCount}</span> rows with{' '}
-              <span className="font-semibold">{csv.csvResult.headers.length}</span> columns. Map CSV columns to guest fields:
-            </p>
-            <div className="grid grid-cols-2 gap-3">
-              {GUEST_FIELDS.map((field) => (
-                <Select
-                  key={field.value}
-                  label={field.label}
-                  options={[
-                    { value: '', label: '-- Skip --' },
-                    ...csv.csvResult!.headers.map((h) => ({ value: h, label: h })),
-                  ]}
-                  value={csv.mapping[field.value] ?? ''}
-                  onChange={(e) =>
-                    csv.setMapping({ ...csv.mapping, [field.value]: e.target.value || null })
-                  }
+          {/* Tabs — only visible in idle state */}
+          {isIdle && (
+            <div className="flex border-b border-slate-200 mb-4">
+              {ADD_GUESTS_TABS.map((t) => {
+                const Icon = t.icon;
+                const active = tab === t.value;
+                return (
+                  <button
+                    key={t.value}
+                    className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors cursor-pointer border-b-2 ${
+                      active
+                        ? 'border-blue-600 text-blue-600'
+                        : 'border-transparent text-slate-500 hover:text-slate-700'
+                    }`}
+                    onClick={() => setTab(t.value)}
+                  >
+                    <Icon size={14} />
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Quick Add tab */}
+          {isIdle && tab === 'quick-add' && (
+            <div className="flex flex-col gap-3">
+              <div className="relative">
+                <textarea
+                  className="h-40 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-blue-600 focus:border-transparent transition-colors resize-none font-mono"
+                  placeholder={"Enter guest names, one per line:\n\nJane Smith\nJohn Doe\nAlice Johnson"}
+                  value={quickText}
+                  onChange={(e) => setQuickText(e.target.value)}
                 />
-              ))}
+              </div>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-slate-500">
+                  {quickNames.length > 0
+                    ? `${quickNames.length} guest${quickNames.length !== 1 ? 's' : ''} to add`
+                    : 'Type or paste names above'}
+                </p>
+                <div className="flex gap-2">
+                  <Button variant="secondary" onClick={handleClose}>
+                    Cancel
+                  </Button>
+                  <Button onClick={handleQuickAdd} disabled={quickNames.length === 0}>
+                    <Plus size={14} />
+                    Add {quickNames.length > 0 ? `${quickNames.length} ` : ''}Guest{quickNames.length !== 1 ? 's' : ''}
+                  </Button>
+                </div>
+              </div>
             </div>
-            <div className="flex justify-end gap-2 mt-2">
-              <Button variant="secondary" onClick={handleClose}>
-                Cancel
-              </Button>
-              <Button onClick={csv.confirmMapping} disabled={!csv.mapping.name}>
-                Preview
-              </Button>
-            </div>
-          </div>
-        )}
+          )}
 
-        {/* Step: Preview */}
-        {csv.step === 'preview' && (
-          <div className="flex flex-col gap-4">
-            <p className="text-sm text-slate-600">
-              Preview of <span className="font-semibold">{csv.parsedGuests.length}</span> guests to import. Showing first 5 rows:
-            </p>
-            <div className="overflow-x-auto rounded-lg border border-slate-200">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200">
-                    <th className="px-3 py-2 text-left text-xs font-medium text-slate-500">Name</th>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-slate-500">Email</th>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-slate-500">RSVP</th>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-slate-500">Dietary</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {csv.parsedGuests.slice(0, 5).map((g) => (
-                    <tr key={g.id} className="border-b border-slate-100">
-                      <td className="px-3 py-2 text-slate-900">{g.name}</td>
-                      <td className="px-3 py-2 text-slate-600">{g.email || '—'}</td>
-                      <td className="px-3 py-2">
-                        <Badge
-                          color={rsvpStatusColors[g.rsvpStatus]?.text}
-                          bgColor={rsvpStatusColors[g.rsvpStatus]?.bg}
-                        >
-                          {capitalise(g.rsvpStatus)}
-                        </Badge>
-                      </td>
-                      <td className="px-3 py-2">
-                        {g.dietaryTags.length > 0
-                          ? g.dietaryTags.map((t) => (
-                              <Badge key={t} color={dietaryTagColors[t]} bgColor={dietaryTagColors[t] + '18'} className="mr-1">
-                                {formatTag(t)}
-                              </Badge>
-                            ))
-                          : '—'}
-                      </td>
+          {/* Paste CSV tab */}
+          {isIdle && tab === 'paste-csv' && (
+            <div className="flex flex-col gap-3">
+              <textarea
+                className="h-40 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-blue-600 focus:border-transparent transition-colors resize-none font-mono"
+                placeholder={"Paste CSV content with headers:\n\nName,Email,RSVP\nJane Smith,jane@example.com,Confirmed\nJohn Doe,john@example.com,Pending"}
+                value={pasteText}
+                onChange={(e) => setPasteText(e.target.value)}
+              />
+              {csv.error && (
+                <p className="text-sm text-red-600">{csv.error}</p>
+              )}
+              <div className="flex items-center justify-end gap-2">
+                <Button variant="secondary" onClick={handleClose}>
+                  Cancel
+                </Button>
+                <Button onClick={handlePasteCSV} disabled={!pasteText.trim()}>
+                  Parse CSV
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Upload File tab */}
+          {isIdle && tab === 'upload-file' && (
+            <div className="flex flex-col items-center gap-4 py-8">
+              <div className="rounded-full bg-blue-50 p-4">
+                <FileSpreadsheet size={32} className="text-blue-600" />
+              </div>
+              <p className="text-sm text-slate-500 text-center">
+                Upload a CSV file with guest information. Column headers will be auto-detected.
+              </p>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) csv.handleFile(file);
+                }}
+              />
+              <div className="flex items-center gap-3">
+                <Button onClick={() => fileInputRef.current?.click()}>
+                  <Upload size={14} />
+                  Choose CSV File
+                </Button>
+                <Button variant="secondary" onClick={downloadCSVTemplate}>
+                  <Download size={14} />
+                  Download Template
+                </Button>
+              </div>
+              <p className="text-xs text-slate-400">or drag and drop a .csv file anywhere on this dialog</p>
+              {csv.error && (
+                <p className="text-sm text-red-600">{csv.error}</p>
+              )}
+            </div>
+          )}
+
+          {/* Quick Add done state */}
+          {quickAddDone !== null && (
+            <div className="flex flex-col items-center gap-4 py-8">
+              <div className="rounded-full bg-green-50 p-4">
+                <CheckCircle2 size={32} className="text-green-600" />
+              </div>
+              <p className="text-sm font-medium text-slate-700">
+                Added {quickAddDone} guest{quickAddDone !== 1 ? 's' : ''}!
+              </p>
+              <div className="flex gap-2">
+                <Button variant="secondary" onClick={handleBack}>
+                  Add More
+                </Button>
+                <Button onClick={handleClose}>Done</Button>
+              </div>
+            </div>
+          )}
+
+          {/* CSV Flow: Mapping */}
+          {csv.step === 'mapping' && csv.csvResult && (
+            <div className="flex flex-col gap-4">
+              <p className="text-sm text-slate-600">
+                Found <span className="font-semibold">{csv.csvResult.rowCount}</span> rows with{' '}
+                <span className="font-semibold">{csv.csvResult.headers.length}</span> columns. Map CSV columns to guest fields:
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                {GUEST_FIELDS.map((field) => (
+                  <Select
+                    key={field.value}
+                    label={field.label}
+                    options={[
+                      { value: '', label: '-- Skip --' },
+                      ...csv.csvResult!.headers.map((h) => ({ value: h, label: h })),
+                    ]}
+                    value={csv.mapping[field.value] ?? ''}
+                    onChange={(e) =>
+                      csv.setMapping({ ...csv.mapping, [field.value]: e.target.value || null })
+                    }
+                  />
+                ))}
+              </div>
+              <div className="flex justify-end gap-2 mt-2">
+                <Button variant="secondary" onClick={handleBack}>
+                  Back
+                </Button>
+                <Button onClick={csv.confirmMapping} disabled={!csv.mapping.name}>
+                  Preview
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* CSV Flow: Preview */}
+          {csv.step === 'preview' && (
+            <div className="flex flex-col gap-4">
+              <p className="text-sm text-slate-600">
+                Preview of <span className="font-semibold">{csv.parsedGuests.length}</span> guests to import. Showing first 5 rows:
+              </p>
+              <div className="overflow-x-auto rounded-lg border border-slate-200">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <th className="px-3 py-2 text-left text-xs font-medium text-slate-500">Name</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-slate-500">Email</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-slate-500">RSVP</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-slate-500">Dietary</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {csv.parsedGuests.slice(0, 5).map((g) => (
+                      <tr key={g.id} className="border-b border-slate-100">
+                        <td className="px-3 py-2 text-slate-900">{g.name}</td>
+                        <td className="px-3 py-2 text-slate-600">{g.email || '—'}</td>
+                        <td className="px-3 py-2">
+                          <Badge
+                            color={rsvpStatusColors[g.rsvpStatus]?.text}
+                            bgColor={rsvpStatusColors[g.rsvpStatus]?.bg}
+                          >
+                            {capitalise(g.rsvpStatus)}
+                          </Badge>
+                        </td>
+                        <td className="px-3 py-2">
+                          {g.dietaryTags.length > 0
+                            ? g.dietaryTags.map((t) => (
+                                <Badge key={t} color={dietaryTagColors[t]} bgColor={dietaryTagColors[t] + '18'} className="mr-1">
+                                  {formatTag(t)}
+                                </Badge>
+                              ))
+                            : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex justify-end gap-2 mt-2">
+                <Button variant="secondary" onClick={handleBack}>
+                  Back
+                </Button>
+                <Button onClick={csv.confirmPreview}>
+                  Import {csv.parsedGuests.length} Guests
+                </Button>
+              </div>
             </div>
-            <div className="flex justify-end gap-2 mt-2">
-              <Button variant="secondary" onClick={handleClose}>
-                Cancel
-              </Button>
-              <Button onClick={csv.confirmPreview}>
-                Import {csv.parsedGuests.length} Guests
-              </Button>
-            </div>
-          </div>
-        )}
+          )}
 
-        {/* Step: Duplicates */}
-        {csv.step === 'duplicates' && (
-          <DuplicateResolver
-            duplicates={csv.duplicates}
-            onResolve={csv.resolveAndImport}
-            onCancel={handleClose}
-          />
-        )}
+          {/* CSV Flow: Duplicates */}
+          {csv.step === 'duplicates' && (
+            <DuplicateResolver
+              duplicates={csv.duplicates}
+              onResolve={csv.resolveAndImport}
+              onCancel={handleClose}
+            />
+          )}
 
-        {/* Step: Done */}
-        {csv.step === 'done' && (
-          <div className="flex flex-col items-center gap-4 py-8">
-            <div className="rounded-full bg-green-50 p-4">
-              <CheckCircle2 size={32} className="text-green-600" />
+          {/* CSV Flow: Done */}
+          {csv.step === 'done' && (
+            <div className="flex flex-col items-center gap-4 py-8">
+              <div className="rounded-full bg-green-50 p-4">
+                <CheckCircle2 size={32} className="text-green-600" />
+              </div>
+              <p className="text-sm font-medium text-slate-700">Import complete!</p>
+              <Button onClick={handleClose}>Done</Button>
             </div>
-            <p className="text-sm font-medium text-slate-700">Import complete!</p>
-            <Button onClick={handleClose}>Done</Button>
-          </div>
-        )}
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -871,8 +1022,7 @@ export function GuestListStep() {
   const [filterRSVP, setFilterRSVP] = useState<FilterStatus>('all');
   const [filterDietary, setFilterDietary] = useState<string>('all');
   const [filterSeated, setFilterSeated] = useState<SeatedFilter>('all');
-  const [addDialogOpen, setAddDialogOpen] = useState(false);
-  const [csvDialogOpen, setCsvDialogOpen] = useState(false);
+  const [addGuestsDialogOpen, setAddGuestsDialogOpen] = useState(false);
   const [detailGuestId, setDetailGuestId] = useState<string | null>(null);
 
   // Fuse.js search
@@ -1000,16 +1150,10 @@ export function GuestListStep() {
               <p className="text-sm text-slate-500">Manage your event guests</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={() => setCsvDialogOpen(true)}>
-              <Upload size={14} />
-              Import CSV
-            </Button>
-            <Button onClick={() => setAddDialogOpen(true)}>
-              <UserPlus size={14} />
-              Add Guest
-            </Button>
-          </div>
+          <Button onClick={() => setAddGuestsDialogOpen(true)}>
+            <UserPlus size={14} />
+            Add Guests
+          </Button>
         </div>
 
         {/* Summary */}
@@ -1088,16 +1232,10 @@ export function GuestListStep() {
                 </div>
                 <h3 className="text-base font-medium text-slate-700 mb-1">No guests yet</h3>
                 <p className="text-sm text-slate-500 mb-4">Add guests manually or import from a CSV file.</p>
-                <div className="flex gap-2">
-                  <Button variant="secondary" onClick={() => setCsvDialogOpen(true)}>
-                    <Upload size={14} />
-                    Import CSV
-                  </Button>
-                  <Button onClick={() => setAddDialogOpen(true)}>
-                    <UserPlus size={14} />
-                    Add Guest
-                  </Button>
-                </div>
+                <Button onClick={() => setAddGuestsDialogOpen(true)}>
+                  <UserPlus size={14} />
+                  Add Guests
+                </Button>
               </>
             ) : (
               <>
@@ -1258,9 +1396,8 @@ export function GuestListStep() {
         )}
       </div>
 
-      {/* Dialogs */}
-      <AddGuestDialog open={addDialogOpen} onOpenChange={setAddDialogOpen} />
-      <CSVImportDialog open={csvDialogOpen} onOpenChange={setCsvDialogOpen} />
+      {/* Dialog */}
+      <AddGuestsDialog open={addGuestsDialogOpen} onOpenChange={setAddGuestsDialogOpen} />
 
       {/* Detail Panel */}
       {detailGuest && (

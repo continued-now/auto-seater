@@ -7,11 +7,12 @@ import { useSeatingStore } from '@/stores/useSeatingStore';
 import { useCanvasInteraction } from '@/hooks/useCanvasInteraction';
 import { useGridSnap } from '@/hooks/useGridSnap';
 import { useWallDrawing } from '@/hooks/useWallDrawing';
-import { getSeatPositions, SEAT_RENDER_RADIUS } from '@/lib/table-geometry';
 import { computeAlignmentSnap, getBoundsFromPosition, getObjectBounds } from '@/lib/alignment-engine';
-import type { AlignmentGuide } from '@/lib/alignment-engine';
+import type { AlignmentGuide, RoomBounds } from '@/lib/alignment-engine';
 import { AlignmentGuideLines } from './AlignmentGuideLines';
 import { RoomCenterGuides } from './RoomCenterGuides';
+import { getAllRoomRects, getVenueBoundingBox } from '@/lib/room-geometry';
+import type { RoomRect } from '@/lib/room-geometry';
 import type { Table, Fixture, Wall, TableShape } from '@/types/venue';
 
 interface VenueCanvasInnerProps {
@@ -41,21 +42,57 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
 
   const [activeGuides, setActiveGuides] = useState<AlignmentGuide[]>([]);
 
+  // Snap-escape hysteresis: track whether we're currently locked to a snap on each axis
+  // and what the snapped coordinate is, so we can require a larger pull to break free
+  const snapLockRef = useRef<{ x: number | null; y: number | null }>({ x: null, y: null });
+  const ESCAPE_MULTIPLIER = 2; // must pull 2x the snap threshold to break free
+
+  const [editingTableId, setEditingTableId] = useState<string | null>(null);
+  const [editingValue, setEditingValue] = useState('');
+  const editInputRef = useRef<HTMLInputElement>(null);
+
   const roomWidthPx = venue.roomWidth * pixelsPerUnit;
-  const roomHeightPx = venue.roomHeight * pixelsPerUnit;
+  const roomLengthPx = venue.roomLength * pixelsPerUnit;
 
   const bp = venue.blueprintMode;
 
+  // Room size warning: minimum 3×3 metres (≈10×10 ft)
+  const minSizeMetres = 3;
+  const minSizeFt = 10;
+  const minWidth = venue.unit === 'ft' ? minSizeFt : minSizeMetres;
+  const minLength = venue.unit === 'ft' ? minSizeFt : minSizeMetres;
+  const roomTooSmall = venue.roomWidth < minWidth || venue.roomLength < minLength;
+
   const SNAP_THRESHOLD = 8 / zoom;
 
+  // Compute all room rectangles for multi-room rendering
+  const roomRects = useMemo(
+    () => getAllRoomRects(venue, pixelsPerUnit),
+    [venue, pixelsPerUnit]
+  );
+
+  // Build array of RoomBounds for alignment engine (all rooms)
+  const allRoomBounds: RoomBounds[] = useMemo(
+    () => roomRects.map((r) => ({
+      left: r.x,
+      right: r.x + r.width,
+      top: r.y,
+      bottom: r.y + r.height,
+      centerX: r.x + r.width / 2,
+      centerY: r.y + r.height / 2,
+    })),
+    [roomRects]
+  );
+
+  // Keep a single-room fallback for backwards compat
   const roomBounds = useMemo(() => ({
     left: 0,
     right: roomWidthPx,
     top: 0,
-    bottom: roomHeightPx,
+    bottom: roomLengthPx,
     centerX: roomWidthPx / 2,
-    centerY: roomHeightPx / 2,
-  }), [roomWidthPx, roomHeightPx]);
+    centerY: roomLengthPx / 2,
+  }), [roomWidthPx, roomLengthPx]);
 
   // Compute glow rect behind selected element
   const selectionGlow = useMemo(() => {
@@ -107,19 +144,34 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
     tr.getLayer()?.batchDraw();
   }, [selectedElementId, venue.tables, venue.fixtures, venue.walls]);
 
+  // Grid lines for all rooms
   const gridLines = useMemo(() => {
-    if (!venue.showGrid) return [];
+    if (!venue.showGrid || gridPixels <= 0) return [];
     const lines: { points: number[]; key: string; isMajor: boolean }[] = [];
-    for (let x = 0; x <= roomWidthPx; x += gridPixels) {
-      const gridIndex = Math.round(x / gridPixels);
-      lines.push({ points: [x, 0, x, roomHeightPx], key: `v-${x}`, isMajor: bp && gridIndex % 5 === 0 });
-    }
-    for (let y = 0; y <= roomHeightPx; y += gridPixels) {
-      const gridIndex = Math.round(y / gridPixels);
-      lines.push({ points: [0, y, roomWidthPx, y], key: `h-${y}`, isMajor: bp && gridIndex % 5 === 0 });
+    for (const room of roomRects) {
+      const rx = room.x;
+      const ry = room.y;
+      const rw = room.width;
+      const rh = room.height;
+      for (let x = 0; x <= rw; x += gridPixels) {
+        const gridIndex = Math.round(x / gridPixels);
+        lines.push({
+          points: [rx + x, ry, rx + x, ry + rh],
+          key: `v-${room.id}-${x}`,
+          isMajor: bp && gridIndex % 5 === 0,
+        });
+      }
+      for (let y = 0; y <= rh; y += gridPixels) {
+        const gridIndex = Math.round(y / gridPixels);
+        lines.push({
+          points: [rx, ry + y, rx + rw, ry + y],
+          key: `h-${room.id}-${y}`,
+          isMajor: bp && gridIndex % 5 === 0,
+        });
+      }
     }
     return lines;
-  }, [venue.showGrid, roomWidthPx, roomHeightPx, gridPixels, bp]);
+  }, [venue.showGrid, roomRects, gridPixels, bp]);
 
   const getStagePointer = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent>): { x: number; y: number } | null => {
@@ -142,26 +194,68 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
       const table = venue.tables.find((t) => t.id === tableId);
       if (!table) return;
 
-      const draggingBounds = getBoundsFromPosition(tableId, node.x(), node.y(), table.width, table.height);
+      const rawX = node.x();
+      const rawY = node.y();
+      const draggingBounds = getBoundsFromPosition(tableId, rawX, rawY, table.width, table.height);
       const otherBounds = [
         ...venue.tables.filter((t) => t.id !== tableId).map(getObjectBounds),
         ...venue.fixtures.map(getObjectBounds),
       ];
 
-      const result = computeAlignmentSnap(draggingBounds, otherBounds, roomBounds, SNAP_THRESHOLD);
-      if (result.didSnapX || result.didSnapY) {
-        node.position(result.snappedPosition);
-        setActiveGuides(result.guides);
+      const result = computeAlignmentSnap(draggingBounds, otherBounds, allRoomBounds, SNAP_THRESHOLD, venue.guides);
+      const lock = snapLockRef.current;
+      const escapeThreshold = SNAP_THRESHOLD * ESCAPE_MULTIPLIER;
+
+      // X axis: hysteresis — if locked, only release when raw pos pulls far enough away
+      let useSnapX = result.didSnapX;
+      if (lock.x !== null) {
+        const pullDistance = Math.abs(rawX - lock.x);
+        if (pullDistance > escapeThreshold) {
+          lock.x = null; // break free
+          useSnapX = false;
+        } else {
+          useSnapX = true; // stay locked even if alignment engine says no snap
+        }
+      }
+      if (useSnapX && result.didSnapX) {
+        lock.x = result.snappedPosition.x;
+      }
+
+      // Y axis: same logic
+      let useSnapY = result.didSnapY;
+      if (lock.y !== null) {
+        const pullDistance = Math.abs(rawY - lock.y);
+        if (pullDistance > escapeThreshold) {
+          lock.y = null;
+          useSnapY = false;
+        } else {
+          useSnapY = true;
+        }
+      }
+      if (useSnapY && result.didSnapY) {
+        lock.y = result.snappedPosition.y;
+      }
+
+      if (useSnapX || useSnapY) {
+        node.position({
+          x: useSnapX ? (lock.x ?? result.snappedPosition.x) : rawX,
+          y: useSnapY ? (lock.y ?? result.snappedPosition.y) : rawY,
+        });
+        setActiveGuides(result.guides.filter((g) =>
+          (g.orientation === 'vertical' && useSnapX) ||
+          (g.orientation === 'horizontal' && useSnapY)
+        ));
       } else {
         setActiveGuides([]);
       }
     },
-    [venue.snapToGuides, venue.tables, venue.fixtures, roomBounds, SNAP_THRESHOLD]
+    [venue.snapToGuides, venue.tables, venue.fixtures, venue.guides, allRoomBounds, SNAP_THRESHOLD, ESCAPE_MULTIPLIER]
   );
 
   const handleTableDragEnd = useCallback(
     (tableId: string, e: Konva.KonvaEventObject<DragEvent>) => {
       setActiveGuides([]);
+      snapLockRef.current = { x: null, y: null };
       const node = e.target;
       // If guide snap already positioned the node, use that; otherwise fall back to grid snap
       const pos = venue.snapToGrid
@@ -180,26 +274,60 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
       const fixture = venue.fixtures.find((f) => f.id === fixtureId);
       if (!fixture) return;
 
-      const draggingBounds = getBoundsFromPosition(fixtureId, node.x(), node.y(), fixture.width, fixture.height);
+      const rawX = node.x();
+      const rawY = node.y();
+      const draggingBounds = getBoundsFromPosition(fixtureId, rawX, rawY, fixture.width, fixture.height);
       const otherBounds = [
         ...venue.tables.map(getObjectBounds),
         ...venue.fixtures.filter((f) => f.id !== fixtureId).map(getObjectBounds),
       ];
 
-      const result = computeAlignmentSnap(draggingBounds, otherBounds, roomBounds, SNAP_THRESHOLD);
-      if (result.didSnapX || result.didSnapY) {
-        node.position(result.snappedPosition);
-        setActiveGuides(result.guides);
+      const result = computeAlignmentSnap(draggingBounds, otherBounds, allRoomBounds, SNAP_THRESHOLD, venue.guides);
+      const lock = snapLockRef.current;
+      const escapeThreshold = SNAP_THRESHOLD * ESCAPE_MULTIPLIER;
+
+      let useSnapX = result.didSnapX;
+      if (lock.x !== null) {
+        if (Math.abs(rawX - lock.x) > escapeThreshold) {
+          lock.x = null;
+          useSnapX = false;
+        } else {
+          useSnapX = true;
+        }
+      }
+      if (useSnapX && result.didSnapX) lock.x = result.snappedPosition.x;
+
+      let useSnapY = result.didSnapY;
+      if (lock.y !== null) {
+        if (Math.abs(rawY - lock.y) > escapeThreshold) {
+          lock.y = null;
+          useSnapY = false;
+        } else {
+          useSnapY = true;
+        }
+      }
+      if (useSnapY && result.didSnapY) lock.y = result.snappedPosition.y;
+
+      if (useSnapX || useSnapY) {
+        node.position({
+          x: useSnapX ? (lock.x ?? result.snappedPosition.x) : rawX,
+          y: useSnapY ? (lock.y ?? result.snappedPosition.y) : rawY,
+        });
+        setActiveGuides(result.guides.filter((g) =>
+          (g.orientation === 'vertical' && useSnapX) ||
+          (g.orientation === 'horizontal' && useSnapY)
+        ));
       } else {
         setActiveGuides([]);
       }
     },
-    [venue.snapToGuides, venue.tables, venue.fixtures, roomBounds, SNAP_THRESHOLD]
+    [venue.snapToGuides, venue.tables, venue.fixtures, venue.guides, allRoomBounds, SNAP_THRESHOLD, ESCAPE_MULTIPLIER]
   );
 
   const handleFixtureDragEnd = useCallback(
     (fixtureId: string, e: Konva.KonvaEventObject<DragEvent>) => {
       setActiveGuides([]);
+      snapLockRef.current = { x: null, y: null };
       const node = e.target;
       const pos = venue.snapToGrid
         ? snapPosition(node.x(), node.y())
@@ -268,6 +396,56 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
     [venue.tables, venue.fixtures, venue.walls, snapPosition, updateTable, updateFixture, updateWall]
   );
 
+  // Inline label editing
+  const handleTableDblClick = useCallback(
+    (tableId: string) => {
+      const table = venue.tables.find((t) => t.id === tableId);
+      if (!table) return;
+      setEditingTableId(tableId);
+      setEditingValue(table.label);
+    },
+    [venue.tables]
+  );
+
+  const commitEdit = useCallback(() => {
+    if (editingTableId && editingValue.trim()) {
+      updateTable(editingTableId, { label: editingValue.trim() });
+    }
+    setEditingTableId(null);
+  }, [editingTableId, editingValue, updateTable]);
+
+  // Focus edit input when it appears
+  useEffect(() => {
+    if (editingTableId && editInputRef.current) {
+      editInputRef.current.focus();
+      editInputRef.current.select();
+    }
+  }, [editingTableId]);
+
+  // Compute edit input screen position
+  const editInputStyle = useMemo(() => {
+    if (!editingTableId) return null;
+    const table = venue.tables.find((t) => t.id === editingTableId);
+    if (!table) return null;
+    const screenX = table.position.x * zoom + panOffset.x;
+    const screenY = table.position.y * zoom + panOffset.y;
+    const inputWidth = Math.max(80, table.width * zoom);
+    return {
+      position: 'absolute' as const,
+      left: screenX - inputWidth / 2,
+      top: screenY - 10 * zoom,
+      width: inputWidth,
+      fontSize: 11 * zoom,
+      textAlign: 'center' as const,
+      border: '1.5px solid #2563EB',
+      borderRadius: 4,
+      padding: '2px 4px',
+      outline: 'none',
+      background: 'white',
+      zIndex: 10,
+    };
+  }, [editingTableId, venue.tables, zoom, panOffset]);
+
   const handleStageMouseDown = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent>) => {
       // Wall drawing takes priority
@@ -311,6 +489,7 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
   );
 
   return (
+    <div style={{ position: 'relative', width, height }}>
     <Stage
       ref={stageRef}
       width={width}
@@ -325,18 +504,22 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
       onMouseUp={handleStageMouseUp}
       style={{ cursor: isDrawing ? 'crosshair' : 'default' }}
     >
-      {/* Layer 1: Background — grid + room boundary + room center guides */}
+      {/* Layer 1: Background — multi-room fills + grids + boundaries + room center guides */}
       <Layer listening={false}>
-        {/* Room background */}
-        <Rect
-          x={0}
-          y={0}
-          width={roomWidthPx}
-          height={roomHeightPx}
-          fill={bp ? '#e8f0fe' : '#ffffff'}
-          listening={false}
-        />
+        {/* Room backgrounds */}
+        {roomRects.map((room) => (
+          <Rect
+            key={`bg-${room.id}`}
+            x={room.x}
+            y={room.y}
+            width={room.width}
+            height={room.height}
+            fill={room.color ? room.color : (bp ? '#e8f0fe' : '#ffffff')}
+            listening={false}
+          />
+        ))}
 
+        {/* Grid lines (scoped per room) */}
         {gridLines.map((line) => (
           <Line
             key={line.key}
@@ -347,45 +530,126 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
           />
         ))}
 
-        {/* Room boundary */}
-        <Rect
-          x={0}
-          y={0}
-          width={roomWidthPx}
-          height={roomHeightPx}
-          stroke={bp ? '#1a56db' : '#334155'}
-          strokeWidth={2}
-          fill="transparent"
-          listening={false}
-        />
+        {/* Room boundaries + labels */}
+        {roomRects.map((room, idx) => {
+          const isAdditional = idx > 0;
+          const roomW = room.width / pixelsPerUnit;
+          const roomH = room.height / pixelsPerUnit;
+          return (
+            <Group key={`boundary-${room.id}`}>
+              <Rect
+                x={room.x}
+                y={room.y}
+                width={room.width}
+                height={room.height}
+                stroke={bp ? '#1a56db' : (isAdditional ? '#64748b' : '#334155')}
+                strokeWidth={2}
+                fill="transparent"
+                dash={isAdditional ? [8, 4] : undefined}
+                listening={false}
+              />
+              {/* Room label at top-left */}
+              {isAdditional && (
+                <Text
+                  x={room.x + 6}
+                  y={room.y + 4}
+                  text={room.label}
+                  fontSize={10}
+                  fontFamily="system-ui, sans-serif"
+                  fill={bp ? '#1a56db' : '#64748b'}
+                  listening={false}
+                />
+              )}
+              {/* Blueprint dimension labels per room */}
+              {bp && (
+                <>
+                  <Text
+                    x={room.x + room.width / 2 - 40}
+                    y={room.y + room.height + 8}
+                    text={`${roomW} ${venue.unit}`}
+                    fontSize={11}
+                    fontFamily="system-ui, sans-serif"
+                    fill="#1a56db"
+                    listening={false}
+                  />
+                  <Text
+                    x={room.x + room.width + 8}
+                    y={room.y + room.height / 2 - 6}
+                    text={`${roomH} ${venue.unit}`}
+                    fontSize={11}
+                    fontFamily="system-ui, sans-serif"
+                    fill="#1a56db"
+                    rotation={90}
+                    listening={false}
+                  />
+                </>
+              )}
+            </Group>
+          );
+        })}
 
-        {/* Blueprint dimension labels */}
-        {bp && (
-          <>
-            <Text
-              x={roomWidthPx / 2 - 40}
-              y={roomHeightPx + 8}
-              text={`${venue.roomWidth} ${venue.unit}`}
-              fontSize={11}
-              fontFamily="system-ui, sans-serif"
-              fill="#1a56db"
+        {/* Room center guides for each room */}
+        {venue.showRoomCenter && roomRects.map((room) => (
+          <RoomCenterGuides
+            key={`center-${room.id}`}
+            roomWidthPx={room.width}
+            roomLengthPx={room.height}
+            offsetX={room.x}
+            offsetY={room.y}
+          />
+        ))}
+
+        {/* User-placed guides */}
+        {venue.guides.map((guide) => (
+          <Line
+            key={guide.id}
+            points={
+              guide.axis === 'horizontal'
+                ? [0, guide.position, roomWidthPx, guide.position]
+                : [guide.position, 0, guide.position, roomLengthPx]
+            }
+            stroke="#10B981"
+            strokeWidth={0.75}
+            dash={[6, 4]}
+            opacity={0.7}
+            listening={false}
+          />
+        ))}
+
+        {/* Room too small warning */}
+        {roomTooSmall && (
+          <Group listening={false}>
+            <Rect
+              x={Math.max(roomWidthPx / 2 - 130, -130)}
+              y={Math.max(roomLengthPx / 2 - 28, -28)}
+              width={260}
+              height={56}
+              cornerRadius={8}
+              fill="white"
+              stroke="#D97706"
+              strokeWidth={1.5}
+              opacity={0.95}
               listening={false}
             />
             <Text
-              x={roomWidthPx + 8}
-              y={roomHeightPx / 2 - 6}
-              text={`${venue.roomHeight} ${venue.unit}`}
-              fontSize={11}
-              fontFamily="system-ui, sans-serif"
-              fill="#1a56db"
-              rotation={90}
+              x={Math.max(roomWidthPx / 2 - 118, -118)}
+              y={Math.max(roomLengthPx / 2 - 16, -16)}
+              text="⚠"
+              fontSize={16}
               listening={false}
             />
-          </>
-        )}
-
-        {venue.showRoomCenter && (
-          <RoomCenterGuides roomWidthPx={roomWidthPx} roomHeightPx={roomHeightPx} />
+            <Text
+              x={Math.max(roomWidthPx / 2 - 96, -96)}
+              y={Math.max(roomLengthPx / 2 - 18, -18)}
+              text={`Room must be at least\n${minSizeMetres}×${minSizeMetres}m (${minSizeFt}×${minSizeFt}ft)`}
+              fontSize={12}
+              fontFamily="system-ui, sans-serif"
+              fontStyle="500"
+              fill="#92400E"
+              lineHeight={1.4}
+              listening={false}
+            />
+          </Group>
         )}
       </Layer>
 
@@ -428,7 +692,11 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
             onSelect={() => setSelectedElement(table.id, 'table')}
             onDragMove={handleTableDragMove}
             onDragEnd={handleTableDragEnd}
+            onDblClick={handleTableDblClick}
             blueprint={bp}
+            roomWidthPx={roomWidthPx}
+            roomLengthPx={roomLengthPx}
+            isEditing={editingTableId === table.id}
           />
         ))}
       </Layer>
@@ -504,10 +772,37 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
         )}
       </Layer>
     </Stage>
+
+    {/* Inline label edit overlay */}
+    {editingTableId && editInputStyle && (
+      <input
+        ref={editInputRef}
+        value={editingValue}
+        onChange={(e) => setEditingValue(e.target.value)}
+        onBlur={commitEdit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commitEdit();
+          if (e.key === 'Escape') setEditingTableId(null);
+        }}
+        style={editInputStyle}
+      />
+    )}
+    </div>
   );
 }
 
 // --- Table rendering ---
+
+function isTableOutOfBounds(table: Table, roomW: number, roomL: number): boolean {
+  const hw = table.width / 2;
+  const hh = table.height / 2;
+  // Use axis-aligned bounding box (ignoring rotation for simplicity — catches most cases)
+  const left = table.position.x - hw;
+  const right = table.position.x + hw;
+  const top = table.position.y - hh;
+  const bottom = table.position.y + hh;
+  return left < 0 || top < 0 || right > roomW || bottom > roomL;
+}
 
 function TableGroup({
   table,
@@ -515,18 +810,26 @@ function TableGroup({
   onSelect,
   onDragMove,
   onDragEnd,
+  onDblClick,
   blueprint,
+  roomWidthPx,
+  roomLengthPx,
+  isEditing,
 }: {
   table: Table;
   isSelected: boolean;
   onSelect: () => void;
   onDragMove: (tableId: string, e: Konva.KonvaEventObject<DragEvent>) => void;
   onDragEnd: (tableId: string, e: Konva.KonvaEventObject<DragEvent>) => void;
+  onDblClick: (tableId: string) => void;
   blueprint: boolean;
+  roomWidthPx: number;
+  roomLengthPx: number;
+  isEditing: boolean;
 }) {
-  const seatPositions = useMemo(
-    () => getSeatPositions(table.shape, table.capacity, table.width, table.height),
-    [table.shape, table.capacity, table.width, table.height]
+  const outOfBounds = useMemo(
+    () => isTableOutOfBounds(table, roomWidthPx, roomLengthPx),
+    [table, roomWidthPx, roomLengthPx]
   );
 
   return (
@@ -544,36 +847,51 @@ function TableGroup({
         e.cancelBubble = true;
         onSelect();
       }}
+      onDblClick={(e) => {
+        e.cancelBubble = true;
+        onDblClick(table.id);
+      }}
       onDragMove={(e) => onDragMove(table.id, e)}
       onDragEnd={(e) => onDragEnd(table.id, e)}
     >
-      <TableShapeRenderer shape={table.shape} width={table.width} height={table.height} blueprint={blueprint} />
+      <TableShapeRenderer
+        shape={table.shape}
+        width={table.width}
+        height={table.height}
+        blueprint={blueprint}
+        outOfBounds={outOfBounds}
+      />
 
-      {seatPositions.map((seat, i) => (
-        <Circle
-          key={i}
-          x={seat.x}
-          y={seat.y}
-          radius={SEAT_RENDER_RADIUS}
-          fill={blueprint ? 'transparent' : 'white'}
-          stroke={blueprint ? '#1a56db' : '#cbd5e1'}
-          strokeWidth={1}
-          listening={false}
-        />
-      ))}
-
+      {/* Seat capacity count */}
       <Text
-        text={table.label}
-        fontSize={11}
+        text={String(table.capacity)}
+        fontSize={14}
+        fontStyle="600"
         fontFamily="system-ui, sans-serif"
-        fill={blueprint ? '#1a56db' : '#334155'}
+        fill={outOfBounds ? '#DC2626' : (blueprint ? '#1a56db' : '#64748b')}
         align="center"
         verticalAlign="middle"
-        offsetX={table.width / 2}
-        offsetY={6}
         width={table.width}
+        height={table.height}
+        offsetX={table.width / 2}
+        offsetY={table.height / 2}
         listening={false}
       />
+
+      {/* Table label (hidden when inline editing) */}
+      {!isEditing && (
+        <Text
+          text={table.label}
+          fontSize={10}
+          fontFamily="system-ui, sans-serif"
+          fill={outOfBounds ? '#DC2626' : (blueprint ? '#1a56db' : '#334155')}
+          align="center"
+          offsetX={table.width / 2}
+          y={table.height / 2 + 4}
+          width={table.width}
+          listening={false}
+        />
+      )}
     </Group>
   );
 }
@@ -583,14 +901,16 @@ function TableShapeRenderer({
   width,
   height,
   blueprint,
+  outOfBounds,
 }: {
   shape: TableShape;
   width: number;
   height: number;
   blueprint: boolean;
+  outOfBounds: boolean;
 }) {
-  const fill = blueprint ? 'transparent' : '#f8fafc';
-  const stroke = blueprint ? '#1a56db' : '#94a3b8';
+  const fill = outOfBounds ? '#FEE2E2' : (blueprint ? 'transparent' : '#f8fafc');
+  const stroke = outOfBounds ? '#DC2626' : (blueprint ? '#1a56db' : '#94a3b8');
 
   switch (shape) {
     case 'round':
@@ -641,6 +961,118 @@ const FIXTURE_LABELS: Record<string, string> = {
   'coat-check': 'Coat Check',
 };
 
+function DoorStyleIndicator({
+  doorStyle,
+  width,
+  height,
+  stroke,
+}: {
+  doorStyle: string | undefined;
+  width: number;
+  height: number;
+  stroke: string;
+}) {
+  const hw = width / 2;
+  const hh = height / 2;
+
+  switch (doorStyle) {
+    case 'swing-out':
+      // Arc swinging outward (below the door)
+      return (
+        <Arc
+          x={-hw}
+          y={hh}
+          innerRadius={0}
+          outerRadius={width * 0.7}
+          angle={90}
+          rotation={-90}
+          fill="transparent"
+          stroke={stroke}
+          strokeWidth={1}
+          dash={[4, 3]}
+          listening={false}
+        />
+      );
+    case 'swing-in':
+      // Arc swinging inward (above the door)
+      return (
+        <Arc
+          x={-hw}
+          y={-hh}
+          innerRadius={0}
+          outerRadius={width * 0.7}
+          angle={90}
+          rotation={0}
+          fill="transparent"
+          stroke={stroke}
+          strokeWidth={1}
+          dash={[4, 3]}
+          listening={false}
+        />
+      );
+    case 'sliding':
+      // Parallel arrow lines showing slide direction
+      return (
+        <>
+          <Line
+            points={[-hw + 4, 0, hw - 4, 0]}
+            stroke={stroke}
+            strokeWidth={1}
+            dash={[6, 3]}
+            listening={false}
+          />
+          <Line
+            points={[hw - 10, -3, hw - 4, 0, hw - 10, 3]}
+            stroke={stroke}
+            strokeWidth={1}
+            listening={false}
+          />
+        </>
+      );
+    case 'double':
+      // Two arcs, one on each side
+      return (
+        <>
+          <Arc
+            x={0}
+            y={-hh}
+            innerRadius={0}
+            outerRadius={hw * 0.7}
+            angle={90}
+            rotation={0}
+            fill="transparent"
+            stroke={stroke}
+            strokeWidth={1}
+            dash={[4, 3]}
+            listening={false}
+          />
+          <Arc
+            x={0}
+            y={-hh}
+            innerRadius={0}
+            outerRadius={hw * 0.7}
+            angle={90}
+            rotation={-90}
+            fill="transparent"
+            stroke={stroke}
+            strokeWidth={1}
+            dash={[4, 3]}
+            listening={false}
+          />
+          {/* Center divider line */}
+          <Line
+            points={[0, -hh, 0, hh]}
+            stroke={stroke}
+            strokeWidth={1}
+            listening={false}
+          />
+        </>
+      );
+    default:
+      return null;
+  }
+}
+
 function FixtureShape({
   fixture,
   isSelected,
@@ -658,6 +1090,7 @@ function FixtureShape({
 }) {
   const fill = blueprint ? 'transparent' : '#f1f5f9';
   const stroke = blueprint ? '#1a56db' : '#94a3b8';
+  const isDoorType = fixture.type === 'door' || fixture.type === 'entrance' || fixture.type === 'exit';
 
   return (
     <Group
@@ -677,8 +1110,7 @@ function FixtureShape({
       onDragMove={(e) => onDragMove(fixture.id, e)}
       onDragEnd={(e) => onDragEnd(fixture.id, e)}
     >
-      {/* Door variant: rect frame + arc swing indicator */}
-      {fixture.type === 'door' ? (
+      {isDoorType ? (
         <>
           <Rect
             x={-fixture.width / 2}
@@ -690,22 +1122,14 @@ function FixtureShape({
             strokeWidth={1}
             cornerRadius={2}
           />
-          <Arc
-            x={-fixture.width / 2}
-            y={fixture.height / 2}
-            innerRadius={0}
-            outerRadius={fixture.width * 0.8}
-            angle={90}
-            rotation={-90}
-            fill="transparent"
+          <DoorStyleIndicator
+            doorStyle={fixture.doorStyle}
+            width={fixture.width}
+            height={fixture.height}
             stroke={stroke}
-            strokeWidth={1}
-            dash={[4, 3]}
-            listening={false}
           />
         </>
       ) : fixture.type === 'window' ? (
-        /* Window variant: dashed blue rect + center line */
         <>
           <Rect
             x={-fixture.width / 2}
@@ -725,7 +1149,6 @@ function FixtureShape({
           />
         </>
       ) : (
-        /* Default fixture rectangle */
         <Rect
           x={-fixture.width / 2}
           y={-fixture.height / 2}

@@ -23,6 +23,7 @@
 # misc
 .DS_Store
 *.pem
+freemium-features.md
 
 # debug
 npm-debug.log*

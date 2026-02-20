@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { parseCSV, mapRowToGuest, type CSVFieldMapping, type CSVParseResult } from '@/lib/csv-parser';
+import { parseCSV, parseCSVString, mapRowToGuest, type CSVFieldMapping, type CSVParseResult } from '@/lib/csv-parser';
 import { detectDuplicates, type DuplicateMatch } from '@/lib/duplicate-detector';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import type { Guest } from '@/types/guest';
@@ -26,44 +26,62 @@ export function useCSVImport() {
   const existingGuests = useSeatingStore((s) => s.guests);
   const importGuests = useSeatingStore((s) => s.importGuests);
 
+  const autoMapHeaders = useCallback((headers: string[]): CSVFieldMapping => {
+    const autoMapping: CSVFieldMapping = {
+      name: null,
+      email: null,
+      phone: null,
+      rsvpStatus: null,
+      dietary: null,
+      notes: null,
+    };
+    const namePatterns = ['name', 'full name', 'guest name', 'first name'];
+    const emailPatterns = ['email', 'e-mail', 'email address'];
+    const phonePatterns = ['phone', 'telephone', 'mobile', 'cell'];
+    const rsvpPatterns = ['rsvp', 'status', 'response', 'attending'];
+    const dietaryPatterns = ['diet', 'dietary', 'food', 'allergies', 'restrictions'];
+    const notePatterns = ['notes', 'comments', 'remarks'];
+
+    for (const header of headers) {
+      const lower = header.toLowerCase();
+      if (!autoMapping.name && namePatterns.some((p) => lower.includes(p))) autoMapping.name = header;
+      if (!autoMapping.email && emailPatterns.some((p) => lower.includes(p))) autoMapping.email = header;
+      if (!autoMapping.phone && phonePatterns.some((p) => lower.includes(p))) autoMapping.phone = header;
+      if (!autoMapping.rsvpStatus && rsvpPatterns.some((p) => lower.includes(p))) autoMapping.rsvpStatus = header;
+      if (!autoMapping.dietary && dietaryPatterns.some((p) => lower.includes(p))) autoMapping.dietary = header;
+      if (!autoMapping.notes && notePatterns.some((p) => lower.includes(p))) autoMapping.notes = header;
+    }
+
+    return autoMapping;
+  }, []);
+
   const handleFile = useCallback(async (file: File) => {
     try {
       setError(null);
       const result = await parseCSV(file);
       setCsvResult(result);
-
-      // Auto-map common column names
-      const autoMapping: CSVFieldMapping = {
-        name: null,
-        email: null,
-        phone: null,
-        rsvpStatus: null,
-        dietary: null,
-        notes: null,
-      };
-      const namePatterns = ['name', 'full name', 'guest name', 'first name'];
-      const emailPatterns = ['email', 'e-mail', 'email address'];
-      const phonePatterns = ['phone', 'telephone', 'mobile', 'cell'];
-      const rsvpPatterns = ['rsvp', 'status', 'response', 'attending'];
-      const dietaryPatterns = ['diet', 'dietary', 'food', 'allergies', 'restrictions'];
-      const notePatterns = ['notes', 'comments', 'remarks'];
-
-      for (const header of result.headers) {
-        const lower = header.toLowerCase();
-        if (!autoMapping.name && namePatterns.some((p) => lower.includes(p))) autoMapping.name = header;
-        if (!autoMapping.email && emailPatterns.some((p) => lower.includes(p))) autoMapping.email = header;
-        if (!autoMapping.phone && phonePatterns.some((p) => lower.includes(p))) autoMapping.phone = header;
-        if (!autoMapping.rsvpStatus && rsvpPatterns.some((p) => lower.includes(p))) autoMapping.rsvpStatus = header;
-        if (!autoMapping.dietary && dietaryPatterns.some((p) => lower.includes(p))) autoMapping.dietary = header;
-        if (!autoMapping.notes && notePatterns.some((p) => lower.includes(p))) autoMapping.notes = header;
-      }
-
-      setMapping(autoMapping);
+      setMapping(autoMapHeaders(result.headers));
       setStep('mapping');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to parse CSV');
     }
-  }, []);
+  }, [autoMapHeaders]);
+
+  const handleText = useCallback((text: string) => {
+    try {
+      setError(null);
+      const result = parseCSVString(text);
+      if (result.headers.length === 0 || result.rowCount === 0) {
+        setError('No valid CSV data found. Make sure text includes headers and at least one row.');
+        return;
+      }
+      setCsvResult(result);
+      setMapping(autoMapHeaders(result.headers));
+      setStep('mapping');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to parse CSV text');
+    }
+  }, [autoMapHeaders]);
 
   const confirmMapping = useCallback(() => {
     if (!csvResult) return;
@@ -112,6 +130,7 @@ export function useCSVImport() {
     duplicates,
     error,
     handleFile,
+    handleText,
     confirmMapping,
     confirmPreview,
     resolveAndImport,

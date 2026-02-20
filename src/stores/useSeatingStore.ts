@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
 import { temporal } from 'zundo';
 import type { Guest, Household, SocialCircle, RSVPStatus, DietaryTag, AccessibilityTag } from '@/types/guest';
-import type { Table, Fixture, Wall, VenueConfig, VenueTemplate } from '@/types/venue';
+import type { Table, Fixture, Wall, Room, VenueConfig, VenueTemplate } from '@/types/venue';
 import type { Constraint, ConstraintViolation } from '@/types/constraint';
 import type { AppStep } from '@/types/seating';
 import type { UserTier } from '@/types/freemium';
@@ -12,6 +12,8 @@ import { defaultVenueConfig, PREBUILT_TEMPLATES } from '@/lib/venue-templates';
 import { validateConstraints } from '@/lib/constraint-validator';
 import { getTableDefaults } from '@/lib/table-geometry';
 import { saveToIndexedDB } from '@/lib/storage';
+import { computeAutoAssignments } from '@/lib/auto-assign';
+import { getAllRoomRects, getRoomCenter } from '@/lib/room-geometry';
 import type { TableShape } from '@/types/venue';
 
 // Debounced IndexedDB backup
@@ -45,8 +47,10 @@ export interface SeatingState {
   selectedGuestIds: string[];
   selectedTableId: string | null;
   selectedElementId: string | null;
-  selectedElementType: 'table' | 'fixture' | 'wall' | null;
+  selectedElementType: 'table' | 'fixture' | 'wall' | 'room' | null;
+  selectedRoomId: string | null;
   canvasToolMode: 'select' | 'draw-wall';
+  activeTemplateId: string | null;
   searchQuery: string;
   zoom: number;
   panOffset: { x: number; y: number };
@@ -77,9 +81,15 @@ export interface SeatingState {
   addGuestToSocialCircle: (guestId: string, circleId: string) => void;
   removeGuestFromSocialCircle: (guestId: string, circleId: string) => void;
 
+  // Room actions
+  addRoom: (room: Omit<Room, 'id'>) => string;
+  updateRoom: (id: string, updates: Partial<Room>) => void;
+  deleteRoom: (id: string) => void;
+  setSelectedRoomId: (id: string | null) => void;
+
   // Venue actions
   updateVenueConfig: (updates: Partial<VenueConfig>) => void;
-  addTable: (shape: TableShape) => string;
+  addTable: (shape: TableShape, roomId?: string) => string;
   updateTable: (id: string, updates: Partial<Table>) => void;
   deleteTable: (id: string) => void;
   addFixture: (fixture: Omit<Fixture, 'id'>) => string;
@@ -102,6 +112,10 @@ export interface SeatingState {
   deleteConstraint: (id: string) => void;
   getViolations: () => ConstraintViolation[];
 
+  // Auto-assign
+  autoAssignGuests: () => number;
+  clearAllAssignments: () => void;
+
   // Template actions
   saveTemplate: (name: string, description: string) => string;
   loadTemplate: (id: string) => void;
@@ -113,13 +127,14 @@ export interface SeatingState {
   setSelectedGuestIds: (ids: string[]) => void;
   toggleGuestSelection: (id: string) => void;
   setSelectedTableId: (id: string | null) => void;
-  setSelectedElement: (id: string | null, type: 'table' | 'fixture' | 'wall' | null) => void;
+  setSelectedElement: (id: string | null, type: 'table' | 'fixture' | 'wall' | 'room' | null) => void;
   clearSelection: () => void;
   setCanvasToolMode: (mode: 'select' | 'draw-wall') => void;
   setSearchQuery: (query: string) => void;
   setZoom: (zoom: number) => void;
   setPanOffset: (offset: { x: number; y: number }) => void;
   setUserTier: (tier: UserTier) => void;
+  setActiveTemplateId: (id: string | null) => void;
 }
 
 export const useSeatingStore = create<SeatingState>()(
@@ -141,7 +156,9 @@ export const useSeatingStore = create<SeatingState>()(
         selectedTableId: null,
         selectedElementId: null,
         selectedElementType: null,
+        selectedRoomId: null,
         canvasToolMode: 'select',
+        activeTemplateId: null,
         searchQuery: '',
         zoom: 1,
         panOffset: { x: 0, y: 0 },
@@ -416,6 +433,64 @@ export const useSeatingStore = create<SeatingState>()(
           debouncedIDBSave(get());
         },
 
+        // Room actions
+        addRoom: (roomData) => {
+          const id = createId();
+          set((state) => {
+            if (!state.venue.rooms) state.venue.rooms = [];
+            state.venue.rooms.push({ ...roomData, id });
+            state.lastSavedAt = Date.now();
+          });
+          debouncedIDBSave(get());
+          return id;
+        },
+
+        updateRoom: (id, updates) => {
+          set((state) => {
+            const room = state.venue.rooms?.find((r) => r.id === id);
+            if (room) {
+              Object.assign(room, updates);
+              state.lastSavedAt = Date.now();
+            }
+          });
+          debouncedIDBSave(get());
+        },
+
+        deleteRoom: (id) => {
+          set((state) => {
+            // Remove the room
+            state.venue.rooms = (state.venue.rooms ?? []).filter((r) => r.id !== id);
+            // Cascade: remove tables, fixtures, walls belonging to this room
+            // Unassign guests from deleted tables first
+            const tablesToDelete = state.venue.tables.filter((t) => t.roomId === id);
+            for (const table of tablesToDelete) {
+              for (const guestId of table.assignedGuestIds) {
+                const guest = state.guests.find((g) => g.id === guestId);
+                if (guest) {
+                  guest.tableId = null;
+                  guest.seatIndex = null;
+                  guest.updatedAt = Date.now();
+                }
+              }
+            }
+            state.venue.tables = state.venue.tables.filter((t) => t.roomId !== id);
+            state.venue.fixtures = state.venue.fixtures.filter((f) => f.roomId !== id);
+            state.venue.walls = state.venue.walls.filter((w) => w.roomId !== id);
+            // Clear selection if it was this room
+            if (state.selectedElementId === id && state.selectedElementType === 'room') {
+              state.selectedElementId = null;
+              state.selectedElementType = null;
+            }
+            if (state.selectedRoomId === id) {
+              state.selectedRoomId = null;
+            }
+            state.lastSavedAt = Date.now();
+          });
+          debouncedIDBSave(get());
+        },
+
+        setSelectedRoomId: (id) => set((state) => { state.selectedRoomId = id; }),
+
         // Venue actions
         updateVenueConfig: (updates) => {
           set((state) => {
@@ -425,21 +500,51 @@ export const useSeatingStore = create<SeatingState>()(
           debouncedIDBSave(get());
         },
 
-        addTable: (shape) => {
+        addTable: (shape, roomId?) => {
           const id = createId();
           const defaults = getTableDefaults(shape);
           set((state) => {
             const tableCount = state.venue.tables.length;
+            const pxPerUnit = state.venue.unit === 'ft' ? 15 : 30;
+
+            // Determine center of the target room
+            let centerX: number;
+            let centerY: number;
+            const targetRoomId = roomId ?? state.selectedRoomId;
+
+            if (targetRoomId && targetRoomId !== '__primary__') {
+              const roomRects = getAllRoomRects(state.venue, pxPerUnit);
+              const roomRect = roomRects.find((r) => r.id === targetRoomId);
+              if (roomRect) {
+                const center = getRoomCenter(roomRect);
+                centerX = center.x;
+                centerY = center.y;
+              } else {
+                centerX = (state.venue.roomWidth * pxPerUnit) / 2;
+                centerY = (state.venue.roomLength * pxPerUnit) / 2;
+              }
+            } else {
+              centerX = (state.venue.roomWidth * pxPerUnit) / 2;
+              centerY = (state.venue.roomLength * pxPerUnit) / 2;
+            }
+
+            // Spiral offset so tables don't stack on top of each other
+            const offset = tableCount * 20;
+            const angle = tableCount * 2.4; // golden angle in radians
             state.venue.tables.push({
               id,
               label: `Table ${tableCount + 1}`,
               shape,
-              position: { x: 200 + (tableCount % 5) * 150, y: 200 + Math.floor(tableCount / 5) * 150 },
+              position: {
+                x: centerX + Math.cos(angle) * offset,
+                y: centerY + Math.sin(angle) * offset,
+              },
               rotation: 0,
               capacity: defaults.capacity,
               width: defaults.width,
               height: defaults.height,
               assignedGuestIds: [],
+              roomId: targetRoomId ?? undefined,
             });
             state.lastSavedAt = Date.now();
           });
@@ -686,6 +791,54 @@ export const useSeatingStore = create<SeatingState>()(
           return validateConstraints(state.constraints, state.guests, state.venue.tables);
         },
 
+        // Auto-assign
+        autoAssignGuests: () => {
+          const state = get();
+          const assignments = computeAutoAssignments(
+            state.guests,
+            state.venue.tables,
+            state.households,
+            state.socialCircles,
+            state.constraints
+          );
+          if (assignments.length === 0) return 0;
+          set((s) => {
+            const now = Date.now();
+            for (const a of assignments) {
+              const guest = s.guests.find((g) => g.id === a.guestId);
+              const table = s.venue.tables.find((t) => t.id === a.tableId);
+              if (!guest || !table) continue;
+              guest.tableId = a.tableId;
+              guest.seatIndex = a.seatIndex;
+              guest.updatedAt = now;
+              if (!table.assignedGuestIds.includes(a.guestId)) {
+                table.assignedGuestIds.push(a.guestId);
+              }
+            }
+            s.lastSavedAt = now;
+          });
+          debouncedIDBSave(get());
+          return assignments.length;
+        },
+
+        clearAllAssignments: () => {
+          set((state) => {
+            const now = Date.now();
+            for (const guest of state.guests) {
+              if (guest.tableId) {
+                guest.tableId = null;
+                guest.seatIndex = null;
+                guest.updatedAt = now;
+              }
+            }
+            for (const table of state.venue.tables) {
+              table.assignedGuestIds = [];
+            }
+            state.lastSavedAt = now;
+          });
+          debouncedIDBSave(get());
+        },
+
         // Template actions
         saveTemplate: (name, description) => {
           const id = createId();
@@ -731,7 +884,9 @@ export const useSeatingStore = create<SeatingState>()(
             config.tables = config.tables.map((t) => ({ ...t, id: createId(), assignedGuestIds: [] }));
             config.fixtures = config.fixtures.map((f) => ({ ...f, id: createId() }));
             config.walls = config.walls.map((w) => ({ ...w, id: createId() }));
+            if (!config.rooms) config.rooms = [];
             state.venue = config;
+            state.activeTemplateId = template.id;
             state.selectedTableId = null;
             state.selectedElementId = null;
             state.selectedElementType = null;
@@ -768,19 +923,20 @@ export const useSeatingStore = create<SeatingState>()(
         setZoom: (zoom) => set((state) => { state.zoom = Math.max(0.25, Math.min(3, zoom)); }),
         setPanOffset: (offset) => set((state) => { state.panOffset = offset; }),
         setUserTier: (tier) => set((state) => { state.userTier = tier; }),
+        setActiveTemplateId: (id) => set((state) => { state.activeTemplateId = id; }),
       })),
       {
         // zundo temporal config — exclude UI state from undo/redo
         limit: 100,
         partialize: (state) => {
-          const { currentStep, selectedGuestIds, selectedTableId, selectedElementId, selectedElementType, canvasToolMode, searchQuery, zoom, panOffset, lastSavedAt, userTier, ...rest } = state;
+          const { currentStep, selectedGuestIds, selectedTableId, selectedElementId, selectedElementType, selectedRoomId, canvasToolMode, activeTemplateId, searchQuery, zoom, panOffset, lastSavedAt, userTier, ...rest } = state;
           return rest;
         },
       }
     ),
     {
       name: 'auto-seater-storage',
-      version: 3,
+      version: 6,
       partialize: (state) => ({
         guests: state.guests,
         households: state.households,
@@ -808,6 +964,25 @@ export const useSeatingStore = create<SeatingState>()(
             if (venue.showRoomCenter === undefined) venue.showRoomCenter = false;
           }
           if (state.userTier === undefined) state.userTier = 'free';
+        }
+        if (version < 4) {
+          const venue = state.venue as Record<string, unknown> | undefined;
+          if (venue && venue.roomHeight !== undefined) {
+            venue.roomLength = venue.roomHeight;
+            delete venue.roomHeight;
+          }
+        }
+        if (version < 5) {
+          const venue = state.venue as Record<string, unknown> | undefined;
+          if (venue && !venue.guides) {
+            venue.guides = [];
+          }
+        }
+        if (version < 6) {
+          const venue = state.venue as Record<string, unknown> | undefined;
+          if (venue && !venue.rooms) {
+            venue.rooms = [];
+          }
         }
         return state as never;
       },

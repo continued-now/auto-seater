@@ -36,6 +36,18 @@ export function parseCSV(file: File): Promise<CSVParseResult> {
   });
 }
 
+export function parseCSVString(text: string): CSVParseResult {
+  const results = Papa.parse(text, {
+    header: true,
+    skipEmptyLines: true,
+  });
+  return {
+    headers: results.meta.fields ?? [],
+    rows: results.data as Record<string, string>[],
+    rowCount: results.data.length,
+  };
+}
+
 const RSVP_MAP: Record<string, RSVPStatus> = {
   confirmed: 'confirmed',
   yes: 'confirmed',

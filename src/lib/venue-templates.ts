@@ -1,9 +1,9 @@
-import type { VenueConfig, VenueTemplate } from '@/types/venue';
+import type { VenueConfig, VenueTemplate, FixtureType } from '@/types/venue';
 import { createId } from './id';
 
 export const defaultVenueConfig: VenueConfig = {
   roomWidth: 60,
-  roomHeight: 40,
+  roomLength: 40,
   unit: 'ft',
   gridSize: 5,
   showGrid: true,
@@ -14,7 +14,9 @@ export const defaultVenueConfig: VenueConfig = {
   tables: [],
   fixtures: [],
   walls: [],
+  guides: [],
   blueprintMode: false,
+  rooms: [],
 };
 
 export function createTemplate(
@@ -35,21 +37,43 @@ export function createTemplate(
 const PX = 15;
 
 export interface PrebuiltTemplate {
+  id: string;
   name: string;
   description: string;
   guestCapacity: string;
   config: VenueConfig;
 }
 
+// Fixtures shown for every template type
+export const COMMON_FIXTURE_TYPES: FixtureType[] = [
+  'entrance',
+  'exit',
+  'door',
+  'restroom',
+  'pillar',
+  'window',
+];
+
+// Fixtures relevant to each template (shown alongside common fixtures)
+export const TEMPLATE_FIXTURES: Record<string, FixtureType[]> = {
+  wedding: ['stage', 'dance-floor', 'bar', 'dj-booth', 'photo-booth', 'buffet'],
+  corporate: ['stage', 'buffet', 'coat-check', 'av-sound-room', 'kitchen'],
+  cocktail: ['bar', 'dance-floor', 'dj-booth', 'buffet'],
+  classroom: ['stage', 'av-sound-room'],
+  'u-shape': ['dance-floor', 'bar'],
+  outdoor: ['bar', 'dance-floor', 'buffet', 'photo-booth', 'dj-booth'],
+};
+
 export const PREBUILT_TEMPLATES: PrebuiltTemplate[] = [
   // 1. Wedding Banquet Hall — 80×60 ft
   {
+    id: 'wedding',
     name: 'Wedding Banquet Hall',
     description: 'Classic wedding layout with head table, sweetheart table, round guest tables, dance floor, and stage.',
     guestCapacity: '130–160',
     config: {
       roomWidth: 80,
-      roomHeight: 60,
+      roomLength: 60,
       unit: 'ft',
       gridSize: 5,
       showGrid: true,
@@ -59,6 +83,8 @@ export const PREBUILT_TEMPLATES: PrebuiltTemplate[] = [
       backgroundImage: null,
       blueprintMode: false,
       walls: [],
+      guides: [],
+      rooms: [],
       tables: [
         // Head table at top center
         { id: 't1', label: 'Head Table', shape: 'head', position: { x: 40 * PX, y: 5 * PX }, rotation: 0, capacity: 10, width: 240, height: 40, assignedGuestIds: [] },
@@ -90,12 +116,13 @@ export const PREBUILT_TEMPLATES: PrebuiltTemplate[] = [
 
   // 2. Corporate Gathering — 70×50 ft
   {
+    id: 'corporate',
     name: 'Corporate Gathering',
     description: 'Corporate event with round tables, VIP rectangular tables, stage, podium, and bar.',
     guestCapacity: '100–120',
     config: {
       roomWidth: 70,
-      roomHeight: 50,
+      roomLength: 50,
       unit: 'ft',
       gridSize: 5,
       showGrid: true,
@@ -105,6 +132,8 @@ export const PREBUILT_TEMPLATES: PrebuiltTemplate[] = [
       backgroundImage: null,
       blueprintMode: false,
       walls: [],
+      guides: [],
+      rooms: [],
       tables: [
         // 10 round tables
         ...Array.from({ length: 10 }, (_, i) => ({
@@ -143,12 +172,13 @@ export const PREBUILT_TEMPLATES: PrebuiltTemplate[] = [
 
   // 3. Cocktail Reception — 60×40 ft
   {
+    id: 'cocktail',
     name: 'Cocktail Reception',
     description: 'Standing-style cocktail event with cocktail tables, multiple bars, dance floor, and buffet stations.',
     guestCapacity: '80–120',
     config: {
       roomWidth: 60,
-      roomHeight: 40,
+      roomLength: 40,
       unit: 'ft',
       gridSize: 5,
       showGrid: true,
@@ -158,6 +188,8 @@ export const PREBUILT_TEMPLATES: PrebuiltTemplate[] = [
       backgroundImage: null,
       blueprintMode: false,
       walls: [],
+      guides: [],
+      rooms: [],
       tables: [
         // 12 cocktail tables scattered
         ...Array.from({ length: 12 }, (_, i) => ({
@@ -188,12 +220,13 @@ export const PREBUILT_TEMPLATES: PrebuiltTemplate[] = [
 
   // 4. Classroom / Conference — 50×40 ft
   {
+    id: 'classroom',
     name: 'Classroom / Conference',
     description: 'Classroom-style rows of rectangular tables facing a front stage.',
     guestCapacity: '48–64',
     config: {
       roomWidth: 50,
-      roomHeight: 40,
+      roomLength: 40,
       unit: 'ft',
       gridSize: 5,
       showGrid: true,
@@ -203,6 +236,8 @@ export const PREBUILT_TEMPLATES: PrebuiltTemplate[] = [
       backgroundImage: null,
       blueprintMode: false,
       walls: [],
+      guides: [],
+      rooms: [],
       tables: [
         // 8 rectangular tables in 4 rows of 2
         ...Array.from({ length: 8 }, (_, i) => ({
@@ -227,12 +262,13 @@ export const PREBUILT_TEMPLATES: PrebuiltTemplate[] = [
 
   // 5. U-Shape Banquet — 50×40 ft
   {
+    id: 'u-shape',
     name: 'U-Shape Banquet',
     description: 'U-shaped table arrangement with head table, two long side tables, and central dance floor.',
     guestCapacity: '40–60',
     config: {
       roomWidth: 50,
-      roomHeight: 40,
+      roomLength: 40,
       unit: 'ft',
       gridSize: 5,
       showGrid: true,
@@ -242,6 +278,8 @@ export const PREBUILT_TEMPLATES: PrebuiltTemplate[] = [
       backgroundImage: null,
       blueprintMode: false,
       walls: [],
+      guides: [],
+      rooms: [],
       tables: [
         // Head table at top
         { id: 't1', label: 'Head Table', shape: 'head', position: { x: 25 * PX, y: 5 * PX }, rotation: 0, capacity: 12, width: 300, height: 40, assignedGuestIds: [] },
@@ -259,12 +297,13 @@ export const PREBUILT_TEMPLATES: PrebuiltTemplate[] = [
 
   // 6. Outdoor Garden — 80×60 ft
   {
+    id: 'outdoor',
     name: 'Outdoor Garden Party',
     description: 'Outdoor garden event with organically scattered round tables, multiple bars, and buffet stations.',
     guestCapacity: '100–140',
     config: {
       roomWidth: 80,
-      roomHeight: 60,
+      roomLength: 60,
       unit: 'ft',
       gridSize: 5,
       showGrid: true,
@@ -274,6 +313,8 @@ export const PREBUILT_TEMPLATES: PrebuiltTemplate[] = [
       backgroundImage: null,
       blueprintMode: false,
       walls: [],
+      guides: [],
+      rooms: [],
       tables: [
         // 12 round tables scattered organically
         { id: 't1', label: 'Table 1', shape: 'round', position: { x: 12 * PX, y: 10 * PX }, rotation: 0, capacity: 10, width: 80, height: 80, assignedGuestIds: [] },

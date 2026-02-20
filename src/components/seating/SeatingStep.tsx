@@ -25,6 +25,8 @@ import {
   UtensilsCrossed,
   X,
   LayoutGrid,
+  Wand2,
+  Eraser,
 } from 'lucide-react';
 
 const SeatingCanvasInner = dynamic(
@@ -49,10 +51,13 @@ export function SeatingStep() {
   const unassignGuest = useSeatingStore((s) => s.unassignGuest);
   const addConstraint = useSeatingStore((s) => s.addConstraint);
   const bulkAssignToTable = useSeatingStore((s) => s.bulkAssignToTable);
+  const autoAssignGuests = useSeatingStore((s) => s.autoAssignGuests);
+  const clearAllAssignments = useSeatingStore((s) => s.clearAllAssignments);
   const getViolations = useSeatingStore((s) => s.getViolations);
   const setCurrentStep = useSeatingStore((s) => s.setCurrentStep);
 
   const [filterTab, setFilterTab] = useState<FilterTab>('all');
+  const [autoAssignResult, setAutoAssignResult] = useState<string | null>(null);
   const [showConstraints, setShowConstraints] = useState(true);
   const [draggedGuestId, setDraggedGuestId] = useState<string | null>(null);
   const [bulkTableId, setBulkTableId] = useState<string | null>(null);
@@ -199,6 +204,24 @@ export function SeatingStep() {
     setBulkTableId(null);
     setShowBulkSelect(false);
   }, [bulkTableId, selectedGuestIds, bulkAssignToTable, setSelectedGuestIds]);
+
+  const handleAutoAssign = useCallback(() => {
+    const count = autoAssignGuests();
+    if (count === 0) {
+      setAutoAssignResult('No eligible guests to assign');
+    } else {
+      setAutoAssignResult(`Assigned ${count} guest${count !== 1 ? 's' : ''}`);
+    }
+    setTimeout(() => setAutoAssignResult(null), 3000);
+  }, [autoAssignGuests]);
+
+  const handleClearAll = useCallback(() => {
+    clearAllAssignments();
+    setAutoAssignResult('All assignments cleared');
+    setTimeout(() => setAutoAssignResult(null), 3000);
+  }, [clearAllAssignments]);
+
+  const seatedCount = useMemo(() => guests.filter((g) => g.tableId).length, [guests]);
 
   const filterTabs: { key: FilterTab; label: string }[] = [
     { key: 'all', label: 'All' },
@@ -399,11 +422,43 @@ export function SeatingStep() {
               </Badge>
             )}
 
+            <div className="w-px h-5 bg-slate-200 mx-1" />
+
+            <Tooltip content="Auto-assign unassigned guests to seats">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleAutoAssign}
+                disabled={unseatedCount === 0 || venue.tables.length === 0}
+              >
+                <Wand2 size={14} />
+                <span className="ml-1">Auto-fill</span>
+              </Button>
+            </Tooltip>
+            {seatedCount > 0 && (
+              <Tooltip content="Clear all seat assignments">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleClearAll}
+                >
+                  <Eraser size={14} />
+                  <span className="ml-1">Clear</span>
+                </Button>
+              </Tooltip>
+            )}
+
+            {autoAssignResult && (
+              <span className="text-xs font-medium text-emerald-600 animate-in fade-in">
+                {autoAssignResult}
+              </span>
+            )}
+
             <div className="flex-1" />
 
             <span className="text-xs text-slate-400">
               {venue.tables.length} table{venue.tables.length !== 1 ? 's' : ''} |{' '}
-              {guests.filter((g) => g.tableId).length}/{guests.length} seated
+              {seatedCount}/{guests.length} seated
             </span>
           </div>
 

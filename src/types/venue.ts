@@ -19,11 +19,32 @@ export type FixtureType =
 
 export type WallStyle = 'solid' | 'partition';
 
+export type DoorStyle = 'swing-in' | 'swing-out' | 'sliding' | 'double';
+
 export type LengthUnit = 'ft' | 'm';
+
+export interface UserGuide {
+  id: string;
+  axis: 'horizontal' | 'vertical';
+  position: number; // pixel offset from origin
+}
+
+export const PRIMARY_ROOM_ID = '__primary__';
 
 export interface Position {
   x: number;
   y: number;
+}
+
+export interface Room {
+  id: string;
+  label: string;
+  position: Position;    // top-left corner in pixels
+  width: number;         // in venue units (ft/m)
+  height: number;        // in venue units
+  color?: string;        // subtle tint to distinguish rooms
+  parentRoomId?: string; // which room this extends from
+  attachEdge?: 'top' | 'right' | 'bottom' | 'left';
 }
 
 export interface Table {
@@ -36,6 +57,7 @@ export interface Table {
   width: number;
   height: number;
   assignedGuestIds: string[];
+  roomId?: string;
 }
 
 export interface Fixture {
@@ -46,6 +68,9 @@ export interface Fixture {
   rotation: number;
   width: number;
   height: number;
+  doorStyle?: DoorStyle;
+  roomId?: string;
+  isCheckIn?: boolean;
 }
 
 export interface Wall {
@@ -56,11 +81,12 @@ export interface Wall {
   thickness: number;
   style: WallStyle;
   rotation: number;
+  roomId?: string;
 }
 
 export interface VenueConfig {
   roomWidth: number;
-  roomHeight: number;
+  roomLength: number;
   unit: LengthUnit;
   gridSize: number;
   showGrid: boolean;
@@ -71,7 +97,9 @@ export interface VenueConfig {
   tables: Table[];
   fixtures: Fixture[];
   walls: Wall[];
+  guides: UserGuide[];
   blueprintMode: boolean;
+  rooms: Room[];
 }
 
 export interface VenueTemplate {
