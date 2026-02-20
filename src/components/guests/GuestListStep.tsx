@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo, useRef, useCallback } from 'react';
+import { toast } from 'sonner';
 import Fuse from 'fuse.js';
 import {
   Search,
@@ -683,6 +684,7 @@ function GuestDetailPanel({
       rsvpStatus: rsvp,
       notes: notes.trim(),
     });
+    toast.success('Guest saved');
     onClose();
   };
 
@@ -1112,13 +1114,17 @@ export function GuestListStep() {
   }, [allSelected, filteredGuests, setSelectedGuestIds]);
 
   const handleBulkDelete = useCallback(() => {
+    const count = selectedGuestIds.length;
     deleteGuests(selectedGuestIds);
+    toast.success(`${count} guest${count !== 1 ? 's' : ''} deleted`);
   }, [deleteGuests, selectedGuestIds]);
 
   const handleBulkRSVP = useCallback(
     (status: RSVPStatus) => {
+      const count = selectedGuestIds.length;
       setGuestRSVP(selectedGuestIds, status);
       setSelectedGuestIds([]);
+      toast.success(`RSVP updated for ${count} guest${count !== 1 ? 's' : ''}`);
     },
     [setGuestRSVP, selectedGuestIds, setSelectedGuestIds]
   );

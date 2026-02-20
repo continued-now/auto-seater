@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { toast } from 'sonner';
 import dynamic from 'next/dynamic';
 import {
   Circle,
@@ -53,6 +54,9 @@ import { useFeatureGate } from '@/hooks/useFeatureGate';
 import { createId } from '@/lib/id';
 import { getAllRoomRects, computeNewRoomPosition, getVenueBoundingBox, getRoomCenter } from '@/lib/room-geometry';
 import type { TableShape, FixtureType } from '@/types/venue';
+import PhotoToRoomDialog from './PhotoToRoomDialog';
+import LayoutAdvisorDialog from './LayoutAdvisorDialog';
+import { Sparkles } from 'lucide-react';
 
 const VenueCanvasInner = dynamic(
   () => import('./VenueCanvasInner').then((m) => ({ default: m.VenueCanvasInner })),
@@ -147,6 +151,11 @@ export function VenueSetupStep() {
   const [newRoomHeight, setNewRoomHeight] = useState(15);
   const [newRoomAttachTo, setNewRoomAttachTo] = useState('__primary__');
   const [newRoomEdge, setNewRoomEdge] = useState<'top' | 'right' | 'bottom' | 'left'>('right');
+
+  // AI Tools dialog state
+  const [photoDialogOpen, setPhotoDialogOpen] = useState(false);
+  const [advisorDialogOpen, setAdvisorDialogOpen] = useState(false);
+  const hasObjectsForAdvisor = venue.tables.length > 0 || venue.fixtures.length > 0;
 
   const pxPerUnit = venue.unit === 'ft' ? 15 : 30;
   const roomRects = useMemo(() => getAllRoomRects(venue, pxPerUnit), [venue, pxPerUnit]);
@@ -326,6 +335,7 @@ export function VenueSetupStep() {
     setTemplateName('');
     setTemplateDesc('');
     setSaveDialogOpen(false);
+    toast.success('Template saved');
   }, [templateName, templateDesc, saveTemplate]);
 
   // Compute wall length for display
@@ -674,6 +684,31 @@ export function VenueSetupStep() {
               <Button variant="secondary" size="sm" onClick={() => setTemplateDialogOpen(true)} className="flex-1">
                 <FolderOpen size={14} /> Load
               </Button>
+            </div>
+          </SidebarSection>
+
+          {/* AI Tools */}
+          <SidebarSection title="AI Tools">
+            <div className="space-y-1.5">
+              <Button
+                variant="secondary"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => setPhotoDialogOpen(true)}
+              >
+                <Camera size={14} /> Photo to Room <ProBadge />
+              </Button>
+              <Tooltip content={hasObjectsForAdvisor ? 'Analyze and optimize your layout' : 'Add tables or fixtures first'}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="w-full justify-start"
+                  disabled={!hasObjectsForAdvisor}
+                  onClick={() => setAdvisorDialogOpen(true)}
+                >
+                  <Sparkles size={14} /> AI Layout Advisor <ProBadge />
+                </Button>
+              </Tooltip>
             </div>
           </SidebarSection>
         </div>
@@ -1058,19 +1093,19 @@ export function VenueSetupStep() {
                   <Input
                     label={`Width (${venue.unit})`}
                     type="number"
-                    min={5}
+                    min={0}
                     value={selectedRoom.width}
                     onChange={(e) =>
-                      updateRoom(selectedRoom.id, { width: Math.max(5, Number(e.target.value) || 5) })
+                      updateRoom(selectedRoom.id, { width: Math.max(0, Number(e.target.value) || 0) })
                     }
                   />
                   <Input
                     label={`Height (${venue.unit})`}
                     type="number"
-                    min={5}
+                    min={0}
                     value={selectedRoom.height}
                     onChange={(e) =>
-                      updateRoom(selectedRoom.id, { height: Math.max(5, Number(e.target.value) || 5) })
+                      updateRoom(selectedRoom.id, { height: Math.max(0, Number(e.target.value) || 0) })
                     }
                   />
                 </div>
@@ -1148,16 +1183,16 @@ export function VenueSetupStep() {
                 <Input
                   label={`Width (${venue.unit})`}
                   type="number"
-                  min={5}
+                  min={0}
                   value={newRoomWidth}
-                  onChange={(e) => setNewRoomWidth(Math.max(5, Number(e.target.value) || 5))}
+                  onChange={(e) => setNewRoomWidth(Math.max(0, Number(e.target.value) || 0))}
                 />
                 <Input
                   label={`Height (${venue.unit})`}
                   type="number"
-                  min={5}
+                  min={0}
                   value={newRoomHeight}
-                  onChange={(e) => setNewRoomHeight(Math.max(5, Number(e.target.value) || 5))}
+                  onChange={(e) => setNewRoomHeight(Math.max(0, Number(e.target.value) || 0))}
                 />
               </div>
               <div className="flex justify-end gap-2 pt-2">
@@ -1287,11 +1322,12 @@ export function VenueSetupStep() {
                         onClick={() => {
                           loadTemplate(tpl.id);
                           setTemplateDialogOpen(false);
+                          toast.success('Template loaded');
                         }}
                       >
                         Load
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={() => deleteTemplate(tpl.id)}>
+                      <Button variant="ghost" size="sm" onClick={() => { deleteTemplate(tpl.id); toast.success('Template deleted'); }}>
                         <Trash2 size={14} />
                       </Button>
                     </div>
@@ -1301,6 +1337,9 @@ export function VenueSetupStep() {
             )}
           </DialogContent>
         </Dialog>
+        {/* AI Tools Dialogs */}
+        <PhotoToRoomDialog open={photoDialogOpen} onOpenChange={setPhotoDialogOpen} />
+        <LayoutAdvisorDialog open={advisorDialogOpen} onOpenChange={setAdvisorDialogOpen} />
       </div>
     </TooltipProvider>
   );

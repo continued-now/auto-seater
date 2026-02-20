@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
+import { toast } from 'sonner';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -22,10 +23,12 @@ export function CheckInGuestCard({ guest, tableLabel }: CheckInGuestCardProps) {
 
   const handleCheckIn = useCallback(() => {
     checkInGuest(guest.id);
-  }, [checkInGuest, guest.id]);
+    toast.success(`${guest.name} checked in`);
+  }, [checkInGuest, guest.id, guest.name]);
 
   const handleUndo = useCallback(() => {
     undoCheckIn(guest.id);
+    toast('Check-in undone');
   }, [undoCheckIn, guest.id]);
 
   return (

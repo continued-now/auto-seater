@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback, useRef, type DragEvent } from 'react';
+import { toast } from 'sonner';
 import dynamic from 'next/dynamic';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { Button } from '@/components/ui/Button';
@@ -8,6 +9,8 @@ import { Badge } from '@/components/ui/Badge';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { Tooltip, TooltipProvider } from '@/components/ui/Tooltip';
 import { ExportPanel } from '@/components/export/ExportPanel';
+import { ViolationDetailsPanel } from './ViolationDetailsPanel';
+import { SeatingStatsPanel } from './SeatingStatsPanel';
 import { rsvpStatusColors, dietaryTagColors } from '@/lib/colour-palette';
 import { getSeatPositions, SEAT_RENDER_RADIUS } from '@/lib/table-geometry';
 import type { Guest } from '@/types/guest';
@@ -60,8 +63,8 @@ export function SeatingStep() {
   const setCurrentStep = useSeatingStore((s) => s.setCurrentStep);
 
   const [filterTab, setFilterTab] = useState<FilterTab>('all');
-  const [autoAssignResult, setAutoAssignResult] = useState<string | null>(null);
   const [showConstraints, setShowConstraints] = useState(true);
+  const [showViolationPanel, setShowViolationPanel] = useState(false);
   const [draggedGuestId, setDraggedGuestId] = useState<string | null>(null);
   const [bulkTableId, setBulkTableId] = useState<string | null>(null);
   const [showBulkSelect, setShowBulkSelect] = useState(false);
@@ -218,17 +221,15 @@ export function SeatingStep() {
   const handleAutoAssign = useCallback(() => {
     const count = autoAssignGuests();
     if (count === 0) {
-      setAutoAssignResult('No eligible guests to assign');
+      toast.info('No eligible guests to assign');
     } else {
-      setAutoAssignResult(`Assigned ${count} guest${count !== 1 ? 's' : ''}`);
+      toast.success(`Assigned ${count} guest${count !== 1 ? 's' : ''}`);
     }
-    setTimeout(() => setAutoAssignResult(null), 3000);
   }, [autoAssignGuests]);
 
   const handleClearAll = useCallback(() => {
     clearAllAssignments();
-    setAutoAssignResult('All assignments cleared');
-    setTimeout(() => setAutoAssignResult(null), 3000);
+    toast.success('All assignments cleared');
   }, [clearAllAssignments]);
 
   const seatedCount = useMemo(() => guests.filter((g) => g.tableId).length, [guests]);
@@ -426,10 +427,15 @@ export function SeatingStep() {
             </Tooltip>
 
             {violations.length > 0 && (
-              <Badge color="#DC2626" bgColor="#FEE2E2">
-                <AlertTriangle size={10} className="mr-1" />
-                {violations.length} violation{violations.length !== 1 ? 's' : ''}
-              </Badge>
+              <button
+                onClick={() => setShowViolationPanel((v) => !v)}
+                className="cursor-pointer"
+              >
+                <Badge color="#DC2626" bgColor="#FEE2E2">
+                  <AlertTriangle size={10} className="mr-1" />
+                  {violations.length} violation{violations.length !== 1 ? 's' : ''}
+                </Badge>
+              </button>
             )}
 
             <div className="w-px h-5 bg-slate-200 mx-1" />
@@ -456,12 +462,6 @@ export function SeatingStep() {
                   <span className="ml-1">Clear</span>
                 </Button>
               </Tooltip>
-            )}
-
-            {autoAssignResult && (
-              <span className="text-xs font-medium text-emerald-600 animate-in fade-in">
-                {autoAssignResult}
-              </span>
             )}
 
             <div className="w-px h-5 bg-slate-200 mx-1" />
@@ -507,6 +507,16 @@ export function SeatingStep() {
                 showConstraints={showConstraints}
                 draggedGuestId={draggedGuestId}
               />
+              {showViolationPanel && violations.length > 0 && (
+                <ViolationDetailsPanel
+                  violations={violations}
+                  constraints={constraints}
+                  guests={guests}
+                  tables={venue.tables}
+                  onClose={() => setShowViolationPanel(false)}
+                />
+              )}
+              <SeatingStatsPanel guests={guests} tables={venue.tables} />
             </div>
           )}
         </div>

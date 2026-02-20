@@ -24,6 +24,7 @@
 .DS_Store
 *.pem
 freemium-features.md
+monetization-plan.md
 
 # debug
 npm-debug.log*

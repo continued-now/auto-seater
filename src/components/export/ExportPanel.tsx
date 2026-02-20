@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { toast } from 'sonner';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { Button } from '@/components/ui/Button';
 import { Dialog, DialogContent } from '@/components/ui/Dialog';
@@ -54,6 +55,10 @@ export function ExportPanel({ stageRef }: ExportPanelProps) {
         title: fpTitle,
         showStats: fpShowStats,
       }, venue, guests);
+      toast.success('Floor plan exported');
+    } catch (err) {
+      toast.error('Export failed');
+      throw err;
     } finally {
       setExporting(false);
       setDialogType(null);
@@ -68,6 +73,10 @@ export function ExportPanel({ stageRef }: ExportPanelProps) {
         showDietaryTags: pcShowDietary,
         showTableNumber: pcShowTable,
       });
+      toast.success('Place cards exported');
+    } catch (err) {
+      toast.error('Export failed');
+      throw err;
     } finally {
       setExporting(false);
       setDialogType(null);
@@ -81,6 +90,10 @@ export function ExportPanel({ stageRef }: ExportPanelProps) {
         paperSize: ecPaper,
         columns: ecColumns,
       });
+      toast.success('Escort cards exported');
+    } catch (err) {
+      toast.error('Export failed');
+      throw err;
     } finally {
       setExporting(false);
       setDialogType(null);
