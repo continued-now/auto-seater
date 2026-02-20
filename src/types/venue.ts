@@ -65,6 +65,8 @@ export interface VenueConfig {
   gridSize: number;
   showGrid: boolean;
   snapToGrid: boolean;
+  snapToGuides: boolean;
+  showRoomCenter: boolean;
   backgroundImage: string | null;
   tables: Table[];
   fixtures: Fixture[];

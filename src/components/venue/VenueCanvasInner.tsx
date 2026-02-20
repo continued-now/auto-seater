@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useEffect, useRef } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { Stage, Layer, Rect, Circle, Group, Line, Text, Arc, Transformer } from 'react-konva';
 import type Konva from 'konva';
 import { useSeatingStore } from '@/stores/useSeatingStore';
@@ -8,6 +8,10 @@ import { useCanvasInteraction } from '@/hooks/useCanvasInteraction';
 import { useGridSnap } from '@/hooks/useGridSnap';
 import { useWallDrawing } from '@/hooks/useWallDrawing';
 import { getSeatPositions, SEAT_RENDER_RADIUS } from '@/lib/table-geometry';
+import { computeAlignmentSnap, getBoundsFromPosition, getObjectBounds } from '@/lib/alignment-engine';
+import type { AlignmentGuide } from '@/lib/alignment-engine';
+import { AlignmentGuideLines } from './AlignmentGuideLines';
+import { RoomCenterGuides } from './RoomCenterGuides';
 import type { Table, Fixture, Wall, TableShape } from '@/types/venue';
 
 interface VenueCanvasInnerProps {
@@ -35,10 +39,23 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
   const stageRef = useRef<Konva.Stage>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
 
+  const [activeGuides, setActiveGuides] = useState<AlignmentGuide[]>([]);
+
   const roomWidthPx = venue.roomWidth * pixelsPerUnit;
   const roomHeightPx = venue.roomHeight * pixelsPerUnit;
 
   const bp = venue.blueprintMode;
+
+  const SNAP_THRESHOLD = 8 / zoom;
+
+  const roomBounds = useMemo(() => ({
+    left: 0,
+    right: roomWidthPx,
+    top: 0,
+    bottom: roomHeightPx,
+    centerX: roomWidthPx / 2,
+    centerY: roomHeightPx / 2,
+  }), [roomWidthPx, roomHeightPx]);
 
   // Compute glow rect behind selected element
   const selectionGlow = useMemo(() => {
@@ -118,24 +135,79 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
     [panOffset, zoom]
   );
 
+  const handleTableDragMove = useCallback(
+    (tableId: string, e: Konva.KonvaEventObject<DragEvent>) => {
+      if (!venue.snapToGuides) return;
+      const node = e.target;
+      const table = venue.tables.find((t) => t.id === tableId);
+      if (!table) return;
+
+      const draggingBounds = getBoundsFromPosition(tableId, node.x(), node.y(), table.width, table.height);
+      const otherBounds = [
+        ...venue.tables.filter((t) => t.id !== tableId).map(getObjectBounds),
+        ...venue.fixtures.map(getObjectBounds),
+      ];
+
+      const result = computeAlignmentSnap(draggingBounds, otherBounds, roomBounds, SNAP_THRESHOLD);
+      if (result.didSnapX || result.didSnapY) {
+        node.position(result.snappedPosition);
+        setActiveGuides(result.guides);
+      } else {
+        setActiveGuides([]);
+      }
+    },
+    [venue.snapToGuides, venue.tables, venue.fixtures, roomBounds, SNAP_THRESHOLD]
+  );
+
   const handleTableDragEnd = useCallback(
     (tableId: string, e: Konva.KonvaEventObject<DragEvent>) => {
+      setActiveGuides([]);
       const node = e.target;
-      const snapped = snapPosition(node.x(), node.y());
-      node.position(snapped);
-      updateTable(tableId, { position: snapped });
+      // If guide snap already positioned the node, use that; otherwise fall back to grid snap
+      const pos = venue.snapToGrid
+        ? snapPosition(node.x(), node.y())
+        : { x: node.x(), y: node.y() };
+      node.position(pos);
+      updateTable(tableId, { position: pos });
     },
-    [snapPosition, updateTable]
+    [snapPosition, updateTable, venue.snapToGrid]
+  );
+
+  const handleFixtureDragMove = useCallback(
+    (fixtureId: string, e: Konva.KonvaEventObject<DragEvent>) => {
+      if (!venue.snapToGuides) return;
+      const node = e.target;
+      const fixture = venue.fixtures.find((f) => f.id === fixtureId);
+      if (!fixture) return;
+
+      const draggingBounds = getBoundsFromPosition(fixtureId, node.x(), node.y(), fixture.width, fixture.height);
+      const otherBounds = [
+        ...venue.tables.map(getObjectBounds),
+        ...venue.fixtures.filter((f) => f.id !== fixtureId).map(getObjectBounds),
+      ];
+
+      const result = computeAlignmentSnap(draggingBounds, otherBounds, roomBounds, SNAP_THRESHOLD);
+      if (result.didSnapX || result.didSnapY) {
+        node.position(result.snappedPosition);
+        setActiveGuides(result.guides);
+      } else {
+        setActiveGuides([]);
+      }
+    },
+    [venue.snapToGuides, venue.tables, venue.fixtures, roomBounds, SNAP_THRESHOLD]
   );
 
   const handleFixtureDragEnd = useCallback(
     (fixtureId: string, e: Konva.KonvaEventObject<DragEvent>) => {
+      setActiveGuides([]);
       const node = e.target;
-      const snapped = snapPosition(node.x(), node.y());
-      node.position(snapped);
-      updateFixture(fixtureId, { position: snapped });
+      const pos = venue.snapToGrid
+        ? snapPosition(node.x(), node.y())
+        : { x: node.x(), y: node.y() };
+      node.position(pos);
+      updateFixture(fixtureId, { position: pos });
     },
-    [snapPosition, updateFixture]
+    [snapPosition, updateFixture, venue.snapToGrid]
   );
 
   const handleWallDragEnd = useCallback(
@@ -253,7 +325,7 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
       onMouseUp={handleStageMouseUp}
       style={{ cursor: isDrawing ? 'crosshair' : 'default' }}
     >
-      {/* Layer 1: Background — grid + room boundary */}
+      {/* Layer 1: Background — grid + room boundary + room center guides */}
       <Layer listening={false}>
         {/* Room background */}
         <Rect
@@ -311,6 +383,10 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
             />
           </>
         )}
+
+        {venue.showRoomCenter && (
+          <RoomCenterGuides roomWidthPx={roomWidthPx} roomHeightPx={roomHeightPx} />
+        )}
       </Layer>
 
       {/* Layer 2: Walls */}
@@ -335,6 +411,7 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
             fixture={fixture}
             isSelected={fixture.id === selectedElementId}
             onSelect={() => setSelectedElement(fixture.id, 'fixture')}
+            onDragMove={handleFixtureDragMove}
             onDragEnd={handleFixtureDragEnd}
             blueprint={bp}
           />
@@ -349,14 +426,16 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
             table={table}
             isSelected={table.id === selectedElementId}
             onSelect={() => setSelectedElement(table.id, 'table')}
+            onDragMove={handleTableDragMove}
             onDragEnd={handleTableDragEnd}
             blueprint={bp}
           />
         ))}
       </Layer>
 
-      {/* Layer 5: Overlay — Transformer + wall drawing preview */}
+      {/* Layer 5: Overlay — Alignment guides + Transformer + wall drawing preview */}
       <Layer>
+        {activeGuides.length > 0 && <AlignmentGuideLines guides={activeGuides} />}
         {selectionGlow && (
           <Rect
             x={selectionGlow.x}
@@ -434,12 +513,14 @@ function TableGroup({
   table,
   isSelected,
   onSelect,
+  onDragMove,
   onDragEnd,
   blueprint,
 }: {
   table: Table;
   isSelected: boolean;
   onSelect: () => void;
+  onDragMove: (tableId: string, e: Konva.KonvaEventObject<DragEvent>) => void;
   onDragEnd: (tableId: string, e: Konva.KonvaEventObject<DragEvent>) => void;
   blueprint: boolean;
 }) {
@@ -463,6 +544,7 @@ function TableGroup({
         e.cancelBubble = true;
         onSelect();
       }}
+      onDragMove={(e) => onDragMove(table.id, e)}
       onDragEnd={(e) => onDragEnd(table.id, e)}
     >
       <TableShapeRenderer shape={table.shape} width={table.width} height={table.height} blueprint={blueprint} />
@@ -563,12 +645,14 @@ function FixtureShape({
   fixture,
   isSelected,
   onSelect,
+  onDragMove,
   onDragEnd,
   blueprint,
 }: {
   fixture: Fixture;
   isSelected: boolean;
   onSelect: () => void;
+  onDragMove: (fixtureId: string, e: Konva.KonvaEventObject<DragEvent>) => void;
   onDragEnd: (fixtureId: string, e: Konva.KonvaEventObject<DragEvent>) => void;
   blueprint: boolean;
 }) {
@@ -590,6 +674,7 @@ function FixtureShape({
         e.cancelBubble = true;
         onSelect();
       }}
+      onDragMove={(e) => onDragMove(fixture.id, e)}
       onDragEnd={(e) => onDragEnd(fixture.id, e)}
     >
       {/* Door variant: rect frame + arc swing indicator */}

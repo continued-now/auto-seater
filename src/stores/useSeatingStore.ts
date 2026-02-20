@@ -6,6 +6,7 @@ import type { Guest, Household, SocialCircle, RSVPStatus, DietaryTag, Accessibil
 import type { Table, Fixture, Wall, VenueConfig, VenueTemplate } from '@/types/venue';
 import type { Constraint, ConstraintViolation } from '@/types/constraint';
 import type { AppStep } from '@/types/seating';
+import type { UserTier } from '@/types/freemium';
 import { createId } from '@/lib/id';
 import { defaultVenueConfig, PREBUILT_TEMPLATES } from '@/lib/venue-templates';
 import { validateConstraints } from '@/lib/constraint-validator';
@@ -37,6 +38,7 @@ export interface SeatingState {
   venue: VenueConfig;
   constraints: Constraint[];
   templates: VenueTemplate[];
+  userTier: UserTier;
 
   // UI (excluded from undo/redo)
   currentStep: AppStep;
@@ -117,6 +119,7 @@ export interface SeatingState {
   setSearchQuery: (query: string) => void;
   setZoom: (zoom: number) => void;
   setPanOffset: (offset: { x: number; y: number }) => void;
+  setUserTier: (tier: UserTier) => void;
 }
 
 export const useSeatingStore = create<SeatingState>()(
@@ -130,6 +133,7 @@ export const useSeatingStore = create<SeatingState>()(
         venue: { ...defaultVenueConfig },
         constraints: [],
         templates: [],
+        userTier: 'free',
 
         // Initial UI
         currentStep: 'guests',
@@ -763,19 +767,20 @@ export const useSeatingStore = create<SeatingState>()(
         setSearchQuery: (query) => set((state) => { state.searchQuery = query; }),
         setZoom: (zoom) => set((state) => { state.zoom = Math.max(0.25, Math.min(3, zoom)); }),
         setPanOffset: (offset) => set((state) => { state.panOffset = offset; }),
+        setUserTier: (tier) => set((state) => { state.userTier = tier; }),
       })),
       {
         // zundo temporal config — exclude UI state from undo/redo
         limit: 100,
         partialize: (state) => {
-          const { currentStep, selectedGuestIds, selectedTableId, selectedElementId, selectedElementType, canvasToolMode, searchQuery, zoom, panOffset, lastSavedAt, ...rest } = state;
+          const { currentStep, selectedGuestIds, selectedTableId, selectedElementId, selectedElementType, canvasToolMode, searchQuery, zoom, panOffset, lastSavedAt, userTier, ...rest } = state;
           return rest;
         },
       }
     ),
     {
       name: 'auto-seater-storage',
-      version: 2,
+      version: 3,
       partialize: (state) => ({
         guests: state.guests,
         households: state.households,
@@ -783,6 +788,7 @@ export const useSeatingStore = create<SeatingState>()(
         venue: state.venue,
         constraints: state.constraints,
         templates: state.templates,
+        userTier: state.userTier,
         currentStep: state.currentStep,
         lastSavedAt: state.lastSavedAt,
       }),
@@ -794,6 +800,14 @@ export const useSeatingStore = create<SeatingState>()(
             if (!venue.walls) venue.walls = [];
             if (venue.blueprintMode === undefined) venue.blueprintMode = false;
           }
+        }
+        if (version < 3) {
+          const venue = state.venue as Record<string, unknown> | undefined;
+          if (venue) {
+            if (venue.snapToGuides === undefined) venue.snapToGuides = true;
+            if (venue.showRoomCenter === undefined) venue.showRoomCenter = false;
+          }
+          if (state.userTier === undefined) state.userTier = 'free';
         }
         return state as never;
       },

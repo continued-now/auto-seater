@@ -14,6 +14,8 @@ import {
   Maximize,
   Grid3X3,
   Magnet,
+  Crosshair,
+  AlignVerticalJustifyCenter,
   RotateCw,
   Trash2,
   Save,
@@ -42,6 +44,8 @@ import { Tooltip, TooltipProvider } from '@/components/ui/Tooltip';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { Dialog, DialogContent } from '@/components/ui/Dialog';
 import { PREBUILT_TEMPLATES } from '@/lib/venue-templates';
+import { ProBadge } from '@/components/ui/ProBadge';
+import { useFeatureGate } from '@/hooks/useFeatureGate';
 import type { TableShape, FixtureType } from '@/types/venue';
 
 const VenueCanvasInner = dynamic(
@@ -108,6 +112,9 @@ export function VenueSetupStep() {
   const setSelectedElement = useSeatingStore((s) => s.setSelectedElement);
   const clearSelection = useSeatingStore((s) => s.clearSelection);
   const setCanvasToolMode = useSeatingStore((s) => s.setCanvasToolMode);
+
+  const { canAccess } = useFeatureGate();
+  const canCustomDimensions = canAccess('custom-dimensions');
 
   const selectedTable = selectedElementType === 'table' ? venue.tables.find((t) => t.id === selectedElementId) ?? null : null;
   const selectedFixture = selectedElementType === 'fixture' ? venue.fixtures.find((f) => f.id === selectedElementId) ?? null : null;
@@ -319,6 +326,22 @@ export function VenueSetupStep() {
                 <Magnet size={14} className="text-slate-500" />
                 Snap to Grid
               </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <Checkbox
+                  checked={venue.snapToGuides}
+                  onCheckedChange={(checked) => updateVenueConfig({ snapToGuides: checked })}
+                />
+                <AlignVerticalJustifyCenter size={14} className="text-slate-500" />
+                Snap to Guides
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <Checkbox
+                  checked={venue.showRoomCenter}
+                  onCheckedChange={(checked) => updateVenueConfig({ showRoomCenter: checked })}
+                />
+                <Crosshair size={14} className="text-slate-500" />
+                Show Room Center
+              </label>
               <Input
                 type="number"
                 label="Grid Size"
@@ -464,6 +487,36 @@ export function VenueSetupStep() {
                     }
                   />
                 </div>
+                <div>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <label className="text-xs text-slate-500">Position ({venue.unit})</label>
+                    {!canCustomDimensions && <ProBadge />}
+                  </div>
+                  <div className="flex gap-2">
+                    <Input
+                      label={`X (${venue.unit})`}
+                      type="number"
+                      step={0.1}
+                      value={Number((selectedTable.position.x / pxPerUnit).toFixed(1))}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (!isNaN(val)) updateTable(selectedTable.id, { position: { ...selectedTable.position, x: val * pxPerUnit } });
+                      }}
+                      disabled={!canCustomDimensions}
+                    />
+                    <Input
+                      label={`Y (${venue.unit})`}
+                      type="number"
+                      step={0.1}
+                      value={Number((selectedTable.position.y / pxPerUnit).toFixed(1))}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (!isNaN(val)) updateTable(selectedTable.id, { position: { ...selectedTable.position, y: val * pxPerUnit } });
+                      }}
+                      disabled={!canCustomDimensions}
+                    />
+                  </div>
+                </div>
                 <div className="text-xs text-slate-400">
                   Shape: {selectedTable.shape} &middot; Assigned:{' '}
                   {selectedTable.assignedGuestIds.length}/{selectedTable.capacity}
@@ -538,6 +591,36 @@ export function VenueSetupStep() {
                       updateFixture(selectedFixture.id, { height: Math.max(10, Number(e.target.value) || 10) })
                     }
                   />
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <label className="text-xs text-slate-500">Position ({venue.unit})</label>
+                    {!canCustomDimensions && <ProBadge />}
+                  </div>
+                  <div className="flex gap-2">
+                    <Input
+                      label={`X (${venue.unit})`}
+                      type="number"
+                      step={0.1}
+                      value={Number((selectedFixture.position.x / pxPerUnit).toFixed(1))}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (!isNaN(val)) updateFixture(selectedFixture.id, { position: { ...selectedFixture.position, x: val * pxPerUnit } });
+                      }}
+                      disabled={!canCustomDimensions}
+                    />
+                    <Input
+                      label={`Y (${venue.unit})`}
+                      type="number"
+                      step={0.1}
+                      value={Number((selectedFixture.position.y / pxPerUnit).toFixed(1))}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (!isNaN(val)) updateFixture(selectedFixture.id, { position: { ...selectedFixture.position, y: val * pxPerUnit } });
+                      }}
+                      disabled={!canCustomDimensions}
+                    />
+                  </div>
                 </div>
                 <div className="text-xs text-slate-400">
                   Type: {selectedFixture.type}
