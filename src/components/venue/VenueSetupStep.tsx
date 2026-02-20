@@ -99,7 +99,15 @@ const FIXTURE_TYPES: { type: FixtureType; label: string; icon: React.ElementType
 ];
 
 export function VenueSetupStep() {
-  const venue = useSeatingStore((s) => s.venue);
+  const _venue = useSeatingStore((s) => s.venue);
+  const venue = useMemo(() => ({
+    ..._venue,
+    guides: _venue.guides ?? [],
+    rooms: _venue.rooms ?? [],
+    walls: _venue.walls ?? [],
+    fixtures: _venue.fixtures ?? [],
+    tables: _venue.tables ?? [],
+  }), [_venue]);
   const templates = useSeatingStore((s) => s.templates);
   const selectedElementId = useSeatingStore((s) => s.selectedElementId);
   const selectedElementType = useSeatingStore((s) => s.selectedElementType);
