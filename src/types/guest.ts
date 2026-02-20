@@ -31,6 +31,8 @@ export interface Guest {
   tableId: string | null;
   seatIndex: number | null;
   notes: string;
+  checkedInAt: number | null;
+  checkedInBy: string | null;
   createdAt: number;
   updatedAt: number;
 }

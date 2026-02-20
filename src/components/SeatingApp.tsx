@@ -21,6 +21,11 @@ const SeatingStep = dynamic(() => import('./seating/SeatingStep').then((m) => ({
   loading: () => <StepLoading />,
 });
 
+const CheckInStep = dynamic(() => import('./check-in/CheckInStep').then((m) => ({ default: m.CheckInStep })), {
+  ssr: false,
+  loading: () => <StepLoading />,
+});
+
 function StepLoading() {
   return (
     <div className="flex-1 flex items-center justify-center">
@@ -32,6 +37,12 @@ function StepLoading() {
 export function SeatingApp() {
   useKeyboardShortcuts();
   const currentStep = useSeatingStore((s) => s.currentStep);
+
+  const isCheckIn = currentStep === 'check-in';
+
+  if (isCheckIn) {
+    return <CheckInStep />;
+  }
 
   return (
     <div className="flex flex-col h-screen">

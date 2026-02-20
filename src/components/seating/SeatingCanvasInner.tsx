@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useCallback, useState, useRef } from 'react';
+import { useMemo, useCallback, useState, useRef, useImperativeHandle, forwardRef } from 'react';
 import { Stage, Layer, Rect, Circle, Group, Line, Text } from 'react-konva';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { useCanvasInteraction } from '@/hooks/useCanvasInteraction';
@@ -11,6 +11,10 @@ import type { Guest } from '@/types/guest';
 import { getAllRoomRects, getVenueBoundingBox } from '@/lib/room-geometry';
 import type { SeatPosition } from '@/types/seating';
 import type Konva from 'konva';
+
+export interface SeatingCanvasInnerHandle {
+  getStageNode: () => Konva.Stage | null;
+}
 
 interface SeatingCanvasInnerProps {
   showConstraints: boolean;
@@ -46,7 +50,7 @@ interface SeatDragState {
   canvasY: number;
 }
 
-export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingCanvasInnerProps) {
+export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCanvasInnerProps>(function SeatingCanvasInner({ showConstraints, draggedGuestId }, ref) {
   const guests = useSeatingStore((s) => s.guests);
   const venue = useSeatingStore((s) => s.venue);
   const constraints = useSeatingStore((s) => s.constraints);
@@ -561,9 +565,16 @@ export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingC
     ]
   );
 
+  const stageRef = useRef<Konva.Stage>(null);
+
+  useImperativeHandle(ref, () => ({
+    getStageNode: () => stageRef.current,
+  }), []);
+
   return (
     <div ref={containerRef} className="w-full h-full">
       <Stage
+        ref={stageRef}
         width={stageSize.width}
         height={stageSize.height}
         scaleX={zoom}
@@ -737,4 +748,4 @@ export function SeatingCanvasInner({ showConstraints, draggedGuestId }: SeatingC
       </Stage>
     </div>
   );
-}
+});

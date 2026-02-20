@@ -1,4 +1,4 @@
-export type AppStep = 'guests' | 'venue' | 'seating';
+export type AppStep = 'guests' | 'venue' | 'seating' | 'check-in';
 
 export interface SeatPosition {
   x: number;

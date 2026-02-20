@@ -45,3 +45,8 @@ export const socialCircleColors = [
   '#0891B2', '#059669', '#EA580C', '#0284C7',
   '#64748B', '#475569',
 ];
+
+export const checkInStatusColors = {
+  arrived: { bg: '#DCFCE7', text: '#16A34A', border: '#16A34A' },
+  pending: { bg: '#FEF3C7', text: '#D97706', border: '#D97706' },
+} as const;

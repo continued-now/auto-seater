@@ -109,6 +109,8 @@ export function mapRowToGuest(
     tableId: null,
     seatIndex: null,
     notes: mapping.notes ? (row[mapping.notes] ?? '').trim() : '',
+    checkedInAt: null,
+    checkedInBy: null,
     createdAt: now,
     updatedAt: now,
   };

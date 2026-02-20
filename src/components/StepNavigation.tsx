@@ -1,6 +1,6 @@
 'use client';
 
-import { Users, Layout, Grid3X3 } from 'lucide-react';
+import { Users, Layout, Grid3X3, ClipboardCheck } from 'lucide-react';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import type { AppStep } from '@/types/seating';
 
@@ -34,6 +34,20 @@ export function StepNavigation() {
           </button>
         );
       })}
+
+      <div className="ml-auto">
+        <button
+          onClick={() => setCurrentStep('check-in')}
+          className={`flex items-center gap-2 px-6 py-3 text-sm font-medium transition-colors border-b-2 cursor-pointer ${
+            currentStep === 'check-in'
+              ? 'border-cyan-600 text-cyan-700'
+              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+          }`}
+        >
+          <ClipboardCheck size={16} />
+          Check-In
+        </button>
+      </div>
     </nav>
   );
 }

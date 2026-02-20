@@ -7,10 +7,13 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { Tooltip, TooltipProvider } from '@/components/ui/Tooltip';
+import { ExportPanel } from '@/components/export/ExportPanel';
 import { rsvpStatusColors, dietaryTagColors } from '@/lib/colour-palette';
 import { getSeatPositions, SEAT_RENDER_RADIUS } from '@/lib/table-geometry';
 import type { Guest } from '@/types/guest';
 import type { Table } from '@/types/venue';
+import type { SeatingCanvasInnerHandle } from './SeatingCanvasInner';
+import type Konva from 'konva';
 import {
   Search,
   ZoomIn,
@@ -63,6 +66,13 @@ export function SeatingStep() {
   const [bulkTableId, setBulkTableId] = useState<string | null>(null);
   const [showBulkSelect, setShowBulkSelect] = useState(false);
   const canvasWrapperRef = useRef<HTMLDivElement>(null);
+  const canvasInnerRef = useRef<SeatingCanvasInnerHandle>(null);
+  const stageRef = useRef<Konva.Stage | null>(null);
+
+  // Keep stageRef in sync with canvas inner handle
+  const updateStageRef = useCallback(() => {
+    stageRef.current = canvasInnerRef.current?.getStageNode() ?? null;
+  }, []);
 
   const violations = useMemo(() => getViolations(), [getViolations, constraints, guests, venue.tables]);
 
@@ -454,6 +464,10 @@ export function SeatingStep() {
               </span>
             )}
 
+            <div className="w-px h-5 bg-slate-200 mx-1" />
+
+            <ExportPanel stageRef={stageRef} />
+
             <div className="flex-1" />
 
             <span className="text-xs text-slate-400">
@@ -486,6 +500,10 @@ export function SeatingStep() {
               onDrop={handleCanvasDrop}
             >
               <SeatingCanvasInner
+                ref={(handle: SeatingCanvasInnerHandle | null) => {
+                  (canvasInnerRef as React.MutableRefObject<SeatingCanvasInnerHandle | null>).current = handle;
+                  stageRef.current = handle?.getStageNode() ?? null;
+                }}
                 showConstraints={showConstraints}
                 draggedGuestId={draggedGuestId}
               />

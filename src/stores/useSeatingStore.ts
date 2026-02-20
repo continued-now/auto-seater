@@ -7,6 +7,8 @@ import type { Table, Fixture, Wall, Room, VenueConfig, VenueTemplate } from '@/t
 import type { Constraint, ConstraintViolation } from '@/types/constraint';
 import type { AppStep } from '@/types/seating';
 import type { UserTier } from '@/types/freemium';
+import type { DetectedRoom } from '@/types/photo-to-room';
+import type { LayoutChange } from '@/types/layout-advisor';
 import { createId } from '@/lib/id';
 import { defaultVenueConfig, PREBUILT_TEMPLATES } from '@/lib/venue-templates';
 import { validateConstraints } from '@/lib/constraint-validator';
@@ -52,12 +54,13 @@ export interface SeatingState {
   canvasToolMode: 'select' | 'draw-wall';
   activeTemplateId: string | null;
   searchQuery: string;
+  checkInSearchQuery: string;
   zoom: number;
   panOffset: { x: number; y: number };
   lastSavedAt: number | null;
 
   // Guest actions
-  addGuest: (guest: Omit<Guest, 'id' | 'createdAt' | 'updatedAt' | 'tableId' | 'seatIndex' | 'householdId' | 'socialCircleIds'>) => string;
+  addGuest: (guest: Omit<Guest, 'id' | 'createdAt' | 'updatedAt' | 'tableId' | 'seatIndex' | 'householdId' | 'socialCircleIds' | 'checkedInAt' | 'checkedInBy'>) => string;
   updateGuest: (id: string, updates: Partial<Guest>) => void;
   deleteGuests: (ids: string[]) => void;
   importGuests: (guests: Guest[]) => void;
@@ -122,6 +125,17 @@ export interface SeatingState {
   deleteTemplate: (id: string) => void;
   loadPrebuiltTemplate: (index: number) => void;
 
+  // AI feature actions
+  applyPhotoLayout: (room: DetectedRoom) => void;
+  applyLayoutSuggestion: (changes: LayoutChange[]) => void;
+
+  // Check-in actions
+  checkInGuest: (guestId: string) => void;
+  checkInHousehold: (householdId: string) => void;
+  undoCheckIn: (guestId: string) => void;
+  resetAllCheckIns: () => void;
+  setCheckInSearchQuery: (query: string) => void;
+
   // UI actions
   setCurrentStep: (step: AppStep) => void;
   setSelectedGuestIds: (ids: string[]) => void;
@@ -160,6 +174,7 @@ export const useSeatingStore = create<SeatingState>()(
         canvasToolMode: 'select',
         activeTemplateId: null,
         searchQuery: '',
+        checkInSearchQuery: '',
         zoom: 1,
         panOffset: { x: 0, y: 0 },
         lastSavedAt: null,
@@ -176,6 +191,8 @@ export const useSeatingStore = create<SeatingState>()(
               socialCircleIds: [],
               tableId: null,
               seatIndex: null,
+              checkedInAt: null,
+              checkedInBy: null,
               createdAt: now,
               updatedAt: now,
             });
@@ -895,6 +912,165 @@ export const useSeatingStore = create<SeatingState>()(
           debouncedIDBSave(get());
         },
 
+        // AI feature actions
+        applyPhotoLayout: (room) => {
+          const PX_PER_FT = 15;
+          const PX_PER_M = 30;
+          const scale = room.unit === 'ft' ? PX_PER_FT : PX_PER_M;
+
+          set((state) => {
+            state.venue.roomWidth = room.width;
+            state.venue.roomLength = room.height;
+            state.venue.unit = room.unit;
+
+            state.venue.tables = [];
+            state.venue.fixtures = [];
+            state.venue.walls = [];
+
+            const roomWidthPx = room.width * scale;
+            const roomHeightPx = room.height * scale;
+
+            for (const obj of room.objects) {
+              const id = createId();
+              const x = obj.position.x * roomWidthPx;
+              const y = obj.position.y * roomHeightPx;
+              const w = obj.width * scale;
+              const h = obj.height * scale;
+
+              if (obj.type === 'table') {
+                state.venue.tables.push({
+                  id,
+                  label: obj.label,
+                  shape: obj.subType as Table['shape'],
+                  position: { x, y },
+                  rotation: obj.rotation,
+                  capacity: obj.subType === 'round' ? 8 : obj.subType === 'cocktail' ? 4 : 6,
+                  width: w,
+                  height: h,
+                  assignedGuestIds: [],
+                });
+              } else {
+                state.venue.fixtures.push({
+                  id,
+                  type: obj.subType as Fixture['type'],
+                  label: obj.label,
+                  position: { x, y },
+                  rotation: obj.rotation,
+                  width: w,
+                  height: h,
+                });
+              }
+            }
+
+            for (const wall of room.walls) {
+              state.venue.walls.push({
+                id: createId(),
+                label: `Wall ${state.venue.walls.length + 1}`,
+                start: {
+                  x: wall.start.x * roomWidthPx,
+                  y: wall.start.y * roomHeightPx,
+                },
+                end: {
+                  x: wall.end.x * roomWidthPx,
+                  y: wall.end.y * roomHeightPx,
+                },
+                thickness: 4,
+                style: wall.style,
+                rotation: 0,
+              });
+            }
+
+            state.selectedElementId = null;
+            state.selectedElementType = null;
+            state.selectedTableId = null;
+            state.lastSavedAt = Date.now();
+          });
+          debouncedIDBSave(get());
+        },
+
+        applyLayoutSuggestion: (changes) => {
+          set((state) => {
+            for (const change of changes) {
+              if (change.objectType === 'table') {
+                const table = state.venue.tables.find((t) => t.id === change.objectId);
+                if (table) {
+                  table.position = { ...change.newPosition };
+                  if (change.newRotation != null) table.rotation = change.newRotation;
+                }
+              } else {
+                const fixture = state.venue.fixtures.find((f) => f.id === change.objectId);
+                if (fixture) {
+                  fixture.position = { ...change.newPosition };
+                  if (change.newRotation != null) fixture.rotation = change.newRotation;
+                }
+              }
+            }
+            state.lastSavedAt = Date.now();
+          });
+          debouncedIDBSave(get());
+        },
+
+        // Check-in actions
+        checkInGuest: (guestId) => {
+          set((state) => {
+            const guest = state.guests.find((g) => g.id === guestId);
+            if (guest) {
+              guest.checkedInAt = Date.now();
+              guest.checkedInBy = 'host';
+              guest.updatedAt = Date.now();
+              state.lastSavedAt = Date.now();
+            }
+          });
+          debouncedIDBSave(get());
+        },
+
+        checkInHousehold: (householdId) => {
+          set((state) => {
+            const now = Date.now();
+            const household = state.households.find((h) => h.id === householdId);
+            if (!household) return;
+            for (const guest of state.guests) {
+              if (guest.householdId === householdId && !guest.checkedInAt) {
+                guest.checkedInAt = now;
+                guest.checkedInBy = 'host';
+                guest.updatedAt = now;
+              }
+            }
+            state.lastSavedAt = now;
+          });
+          debouncedIDBSave(get());
+        },
+
+        undoCheckIn: (guestId) => {
+          set((state) => {
+            const guest = state.guests.find((g) => g.id === guestId);
+            if (guest) {
+              guest.checkedInAt = null;
+              guest.checkedInBy = null;
+              guest.updatedAt = Date.now();
+              state.lastSavedAt = Date.now();
+            }
+          });
+          debouncedIDBSave(get());
+        },
+
+        resetAllCheckIns: () => {
+          set((state) => {
+            const now = Date.now();
+            for (const guest of state.guests) {
+              if (guest.checkedInAt) {
+                guest.checkedInAt = null;
+                guest.checkedInBy = null;
+                guest.updatedAt = now;
+              }
+            }
+            state.lastSavedAt = now;
+          });
+          debouncedIDBSave(get());
+        },
+
+        setCheckInSearchQuery: (query) => set((state) => { state.checkInSearchQuery = query; }),
+
         // UI actions
         setCurrentStep: (step) => set((state) => { state.currentStep = step; }),
         setSelectedGuestIds: (ids) => set((state) => { state.selectedGuestIds = ids; }),
@@ -929,14 +1105,14 @@ export const useSeatingStore = create<SeatingState>()(
         // zundo temporal config — exclude UI state from undo/redo
         limit: 100,
         partialize: (state) => {
-          const { currentStep, selectedGuestIds, selectedTableId, selectedElementId, selectedElementType, selectedRoomId, canvasToolMode, activeTemplateId, searchQuery, zoom, panOffset, lastSavedAt, userTier, ...rest } = state;
+          const { currentStep, selectedGuestIds, selectedTableId, selectedElementId, selectedElementType, selectedRoomId, canvasToolMode, activeTemplateId, searchQuery, checkInSearchQuery, zoom, panOffset, lastSavedAt, userTier, ...rest } = state;
           return rest;
         },
       }
     ),
     {
       name: 'auto-seater-storage',
-      version: 6,
+      version: 7,
       partialize: (state) => ({
         guests: state.guests,
         households: state.households,
@@ -982,6 +1158,15 @@ export const useSeatingStore = create<SeatingState>()(
           const venue = state.venue as Record<string, unknown> | undefined;
           if (venue && !venue.rooms) {
             venue.rooms = [];
+          }
+        }
+        if (version < 7) {
+          const guests = state.guests as Array<Record<string, unknown>> | undefined;
+          if (guests) {
+            for (const guest of guests) {
+              if (guest.checkedInAt === undefined) guest.checkedInAt = null;
+              if (guest.checkedInBy === undefined) guest.checkedInBy = null;
+            }
           }
         }
         return state as never;
