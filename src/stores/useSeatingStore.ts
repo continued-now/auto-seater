@@ -16,11 +16,25 @@ import { getTableDefaults } from '@/lib/table-geometry';
 import { saveToIndexedDB } from '@/lib/storage';
 import { computeAutoAssignments } from '@/lib/auto-assign';
 import { getAllRoomRects, getRoomCenter } from '@/lib/room-geometry';
+import { createDemoData } from '@/lib/demo-data';
 import type { TableShape } from '@/types/venue';
+
+// Pre-demo snapshot shape
+interface PreDemoSnapshot {
+  guests: Guest[];
+  households: Household[];
+  socialCircles: SocialCircle[];
+  venue: VenueConfig;
+  constraints: Constraint[];
+  templates: VenueTemplate[];
+  currentStep: AppStep;
+  lastSavedAt: number | null;
+}
 
 // Debounced IndexedDB backup
 let idbTimer: ReturnType<typeof setTimeout> | null = null;
 function debouncedIDBSave(state: SeatingState) {
+  if (state.isDemoMode) return;
   if (idbTimer) clearTimeout(idbTimer);
   idbTimer = setTimeout(() => {
     saveToIndexedDB('seating-state', {
@@ -58,6 +72,11 @@ export interface SeatingState {
   zoom: number;
   panOffset: { x: number; y: number };
   lastSavedAt: number | null;
+
+  // Demo mode (excluded from undo/redo and persistence)
+  isDemoMode: boolean;
+  demoStep: number;
+  _preDemoSnapshot: PreDemoSnapshot | null;
 
   // Guest actions
   addGuest: (guest: Omit<Guest, 'id' | 'createdAt' | 'updatedAt' | 'tableId' | 'seatIndex' | 'householdId' | 'socialCircleIds' | 'checkedInAt' | 'checkedInBy'>) => string;
@@ -149,6 +168,11 @@ export interface SeatingState {
   setPanOffset: (offset: { x: number; y: number }) => void;
   setUserTier: (tier: UserTier) => void;
   setActiveTemplateId: (id: string | null) => void;
+
+  // Demo actions
+  startDemo: () => void;
+  exitDemo: () => void;
+  advanceDemoStep: () => void;
 }
 
 export const useSeatingStore = create<SeatingState>()(
@@ -178,6 +202,11 @@ export const useSeatingStore = create<SeatingState>()(
         zoom: 1,
         panOffset: { x: 0, y: 0 },
         lastSavedAt: null,
+
+        // Demo mode
+        isDemoMode: false,
+        demoStep: 0,
+        _preDemoSnapshot: null,
 
         // Guest actions
         addGuest: (guestData) => {
@@ -1100,12 +1129,101 @@ export const useSeatingStore = create<SeatingState>()(
         setPanOffset: (offset) => set((state) => { state.panOffset = offset; }),
         setUserTier: (tier) => set((state) => { state.userTier = tier; }),
         setActiveTemplateId: (id) => set((state) => { state.activeTemplateId = id; }),
+
+        // Demo actions
+        startDemo: () => {
+          const current = get();
+          const snapshot: PreDemoSnapshot = {
+            guests: structuredClone(current.guests) as Guest[],
+            households: structuredClone(current.households) as Household[],
+            socialCircles: structuredClone(current.socialCircles) as SocialCircle[],
+            venue: structuredClone(current.venue) as VenueConfig,
+            constraints: structuredClone(current.constraints) as Constraint[],
+            templates: structuredClone(current.templates) as VenueTemplate[],
+            currentStep: current.currentStep,
+            lastSavedAt: current.lastSavedAt,
+          };
+
+          const demo = createDemoData();
+
+          set((state) => {
+            state._preDemoSnapshot = snapshot as PreDemoSnapshot;
+            state.guests = demo.guests as Guest[];
+            state.households = demo.households as Household[];
+            state.socialCircles = demo.socialCircles as SocialCircle[];
+            state.venue = demo.venue as VenueConfig;
+            state.constraints = demo.constraints as Constraint[];
+            state.isDemoMode = true;
+            state.demoStep = 0;
+            state.currentStep = 'guests';
+            state.selectedGuestIds = [];
+            state.selectedTableId = null;
+            state.selectedElementId = null;
+            state.selectedElementType = null;
+            state.zoom = 1;
+            state.panOffset = { x: 0, y: 0 };
+          });
+        },
+
+        exitDemo: () => {
+          const current = get();
+          const snapshot = current._preDemoSnapshot;
+
+          set((state) => {
+            if (snapshot) {
+              state.guests = snapshot.guests as Guest[];
+              state.households = snapshot.households as Household[];
+              state.socialCircles = snapshot.socialCircles as SocialCircle[];
+              state.venue = snapshot.venue as VenueConfig;
+              state.constraints = snapshot.constraints as Constraint[];
+              state.templates = snapshot.templates as VenueTemplate[];
+              state.currentStep = snapshot.currentStep;
+              state.lastSavedAt = snapshot.lastSavedAt;
+            }
+            state.isDemoMode = false;
+            state.demoStep = 0;
+            state._preDemoSnapshot = null;
+            state.selectedGuestIds = [];
+            state.selectedTableId = null;
+            state.selectedElementId = null;
+            state.selectedElementType = null;
+          });
+
+          useSeatingStore.temporal.getState().clear();
+        },
+
+        advanceDemoStep: () => {
+          const current = get();
+          const nextStep = current.demoStep + 1;
+
+          const stepToAppStep: Record<number, AppStep> = {
+            0: 'guests',
+            1: 'venue',
+            2: 'seating',
+          };
+
+          set((state) => {
+            state.demoStep = nextStep;
+            const appStep = stepToAppStep[nextStep];
+            if (appStep) state.currentStep = appStep;
+            state.zoom = 1;
+            state.panOffset = { x: 0, y: 0 };
+          });
+
+          if (nextStep === 2) {
+            setTimeout(() => {
+              if (get().isDemoMode && get().demoStep === 2) {
+                get().autoAssignGuests();
+              }
+            }, 800);
+          }
+        },
       })),
       {
         // zundo temporal config — exclude UI state from undo/redo
         limit: 100,
         partialize: (state) => {
-          const { currentStep, selectedGuestIds, selectedTableId, selectedElementId, selectedElementType, selectedRoomId, canvasToolMode, activeTemplateId, searchQuery, checkInSearchQuery, zoom, panOffset, lastSavedAt, userTier, ...rest } = state;
+          const { currentStep, selectedGuestIds, selectedTableId, selectedElementId, selectedElementType, selectedRoomId, canvasToolMode, activeTemplateId, searchQuery, checkInSearchQuery, zoom, panOffset, lastSavedAt, userTier, isDemoMode, demoStep, _preDemoSnapshot, ...rest } = state;
           return rest;
         },
       }
@@ -1113,17 +1231,20 @@ export const useSeatingStore = create<SeatingState>()(
     {
       name: 'auto-seater-storage',
       version: 7,
-      partialize: (state) => ({
-        guests: state.guests,
-        households: state.households,
-        socialCircles: state.socialCircles,
-        venue: state.venue,
-        constraints: state.constraints,
-        templates: state.templates,
-        userTier: state.userTier,
-        currentStep: state.currentStep,
-        lastSavedAt: state.lastSavedAt,
-      }),
+      partialize: (state) => {
+        if (state.isDemoMode) return {} as never;
+        return {
+          guests: state.guests,
+          households: state.households,
+          socialCircles: state.socialCircles,
+          venue: state.venue,
+          constraints: state.constraints,
+          templates: state.templates,
+          userTier: state.userTier,
+          currentStep: state.currentStep,
+          lastSavedAt: state.lastSavedAt,
+        };
+      },
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
         if (version < 2) {

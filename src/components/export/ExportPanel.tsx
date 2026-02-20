@@ -6,7 +6,7 @@ import { useSeatingStore } from '@/stores/useSeatingStore';
 import { Button } from '@/components/ui/Button';
 import { Dialog, DialogContent } from '@/components/ui/Dialog';
 import { Checkbox } from '@/components/ui/Checkbox';
-import { Download, FileText, CreditCard, List } from 'lucide-react';
+import { Download, FileText, CreditCard, List, Loader2 } from 'lucide-react';
 import { exportFloorPlanPDF } from '@/lib/export/pdf-floor-plan';
 import { exportPlaceCardsPDF } from '@/lib/export/pdf-place-cards';
 import { exportEscortCardsPDF } from '@/lib/export/pdf-escort-cards';
@@ -201,7 +201,7 @@ export function ExportPanel({ stageRef }: ExportPanelProps) {
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" size="sm" onClick={() => setDialogType(null)}>Cancel</Button>
               <Button variant="primary" size="sm" onClick={handleExportFloorPlan} disabled={exporting}>
-                {exporting ? 'Exporting...' : 'Export PDF'}
+                {exporting ? <><Loader2 className="w-4 h-4 animate-spin" /> Exporting...</> : 'Export PDF'}
               </Button>
             </div>
           </div>
@@ -243,7 +243,7 @@ export function ExportPanel({ stageRef }: ExportPanelProps) {
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" size="sm" onClick={() => setDialogType(null)}>Cancel</Button>
               <Button variant="primary" size="sm" onClick={handleExportPlaceCards} disabled={exporting || seatedCount === 0}>
-                {exporting ? 'Exporting...' : `Export ${seatedCount} Cards`}
+                {exporting ? <><Loader2 className="w-4 h-4 animate-spin" /> Exporting...</> : `Export ${seatedCount} Cards`}
               </Button>
             </div>
           </div>
@@ -284,7 +284,7 @@ export function ExportPanel({ stageRef }: ExportPanelProps) {
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" size="sm" onClick={() => setDialogType(null)}>Cancel</Button>
               <Button variant="primary" size="sm" onClick={handleExportEscortCards} disabled={exporting || seatedCount === 0}>
-                {exporting ? 'Exporting...' : 'Export List'}
+                {exporting ? <><Loader2 className="w-4 h-4 animate-spin" /> Exporting...</> : 'Export List'}
               </Button>
             </div>
           </div>

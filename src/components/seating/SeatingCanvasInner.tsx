@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useCallback, useState, useRef, useImperativeHandle, forwardRef } from 'react';
+import React, { useMemo, useCallback, useState, useRef, useImperativeHandle, forwardRef } from 'react';
 import { Stage, Layer, Rect, Circle, Group, Line, Text } from 'react-konva';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { useCanvasInteraction } from '@/hooks/useCanvasInteraction';
@@ -8,8 +8,7 @@ import { getSeatPositions, getSuggestedCapacity, SEAT_RENDER_RADIUS } from '@/li
 import { validateConstraints } from '@/lib/constraint-validator';
 import type { Table } from '@/types/venue';
 import type { Guest } from '@/types/guest';
-import { getAllRoomRects, getVenueBoundingBox } from '@/lib/room-geometry';
-import type { SeatPosition } from '@/types/seating';
+import { getAllRoomRects } from '@/lib/room-geometry';
 import type Konva from 'konva';
 
 export interface SeatingCanvasInnerHandle {
@@ -50,6 +49,251 @@ interface SeatDragState {
   canvasY: number;
 }
 
+/* ------------------------------------------------------------------ */
+/*  SeatingTableGroup — memoized per-table rendering                  */
+/* ------------------------------------------------------------------ */
+
+interface SeatingTableGroupProps {
+  table: Table;
+  tableOccupants: Map<number, Guest> | undefined;
+  isFull: boolean;
+  hasViolation: boolean;
+  isSelected: boolean;
+  isDraggingFromList: boolean;
+  selectedGuestIds: string[];
+  seatDrag: SeatDragState | null;
+  dragTargetSeat: { seat: { tableId: string; seatIdx: number; occupantId: string | null }; dist: number } | null;
+  onSelectTable: (tableId: string, hasNoSeats: boolean, x: number, y: number) => void;
+  onSeatDragStart: (guestId: string, guestName: string, tableId: string, seatIdx: number, e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => void;
+  onSeatClick: (guestId: string, stageX: number, stageY: number) => void;
+  seatDragRef: React.MutableRefObject<SeatDragState | null>;
+}
+
+function areTablePropsEqual(prev: SeatingTableGroupProps, next: SeatingTableGroupProps): boolean {
+  if (prev.table !== next.table) return false;
+  if (prev.tableOccupants !== next.tableOccupants) return false;
+  if (prev.isFull !== next.isFull) return false;
+  if (prev.hasViolation !== next.hasViolation) return false;
+  if (prev.isSelected !== next.isSelected) return false;
+  if (prev.isDraggingFromList !== next.isDraggingFromList) return false;
+  if (prev.selectedGuestIds !== next.selectedGuestIds) return false;
+
+  // seatDrag: only re-render if this table is involved
+  const prevDragRelevant =
+    prev.seatDrag?.sourceTableId === prev.table.id ||
+    prev.dragTargetSeat?.seat.tableId === prev.table.id;
+  const nextDragRelevant =
+    next.seatDrag?.sourceTableId === next.table.id ||
+    next.dragTargetSeat?.seat.tableId === next.table.id;
+  if (prevDragRelevant || nextDragRelevant) {
+    if (prev.seatDrag !== next.seatDrag) return false;
+    if (prev.dragTargetSeat !== next.dragTargetSeat) return false;
+  }
+
+  return true;
+}
+
+const SeatingTableGroup = React.memo(function SeatingTableGroup({
+  table,
+  tableOccupants,
+  isFull,
+  hasViolation,
+  isSelected,
+  isDraggingFromList,
+  selectedGuestIds,
+  seatDrag,
+  dragTargetSeat,
+  onSelectTable,
+  onSeatDragStart,
+  onSeatClick,
+  seatDragRef,
+}: SeatingTableGroupProps) {
+  const seats = getSeatPositions(table.shape, table.capacity, table.width, table.height, table.seatingSide, table.endSeats);
+  const hasNoSeats = table.capacity === 0;
+
+  return (
+    <Group
+      x={table.position.x}
+      y={table.position.y}
+      rotation={table.rotation}
+      onClick={() => {
+        onSelectTable(table.id, hasNoSeats, table.position.x, table.position.y);
+      }}
+    >
+      {/* Table shape */}
+      {table.shape === 'round' || table.shape === 'cocktail' ? (
+        <Circle
+          radius={table.width / 2}
+          fill={COLOURS.tableFill}
+          stroke={isSelected ? '#2563EB' : COLOURS.tableStroke}
+          strokeWidth={isSelected ? 2 : 1}
+        />
+      ) : (
+        <Rect
+          x={-table.width / 2}
+          y={-table.height / 2}
+          width={table.width}
+          height={table.height}
+          cornerRadius={4}
+          fill={COLOURS.tableFill}
+          stroke={isSelected ? '#2563EB' : COLOURS.tableStroke}
+          strokeWidth={isSelected ? 2 : 1}
+        />
+      )}
+
+      {/* Table label */}
+      <Text
+        text={table.label}
+        x={-table.width / 2}
+        y={hasNoSeats ? -14 : -6}
+        width={table.width}
+        align="center"
+        fontSize={11}
+        fontStyle="600"
+        fill="#475569"
+      />
+
+      {/* "Click to add seats" prompt for zero-capacity tables */}
+      {hasNoSeats && (
+        <Text
+          text="Click to add seats"
+          x={-table.width / 2}
+          y={4}
+          width={table.width}
+          align="center"
+          fontSize={9}
+          fill="#94a3b8"
+          listening={false}
+        />
+      )}
+
+      {/* Seats */}
+      {seats.map((seat, idx) => {
+        const occupant = tableOccupants?.get(idx);
+        const isSourceSeat =
+          seatDrag?.sourceTableId === table.id && seatDrag?.sourceSeatIdx === idx;
+        const isDropTarget =
+          dragTargetSeat?.seat.tableId === table.id &&
+          dragTargetSeat?.seat.seatIdx === idx &&
+          !!seatDrag;
+
+        let seatFill: string;
+        let seatStroke: string;
+        let strokeWidth = 1.5;
+
+        if (isSourceSeat) {
+          seatFill = COLOURS.seatDragSource.fill;
+          seatStroke = COLOURS.seatDragSource.stroke;
+          strokeWidth = 2;
+        } else if (isDropTarget) {
+          if (occupant && occupant.id !== seatDrag?.guestId) {
+            seatFill = COLOURS.seatSwapTarget.fill;
+            seatStroke = COLOURS.seatSwapTarget.stroke;
+            strokeWidth = 2.5;
+          } else {
+            seatFill = COLOURS.seatDropValid.fill;
+            seatStroke = COLOURS.seatDropValid.stroke;
+            strokeWidth = 2.5;
+          }
+        } else if (isDraggingFromList && !occupant && !isFull) {
+          seatFill = COLOURS.seatDropValid.fill;
+          seatStroke = COLOURS.seatDropValid.stroke;
+        } else if (isDraggingFromList && isFull && !occupant) {
+          seatFill = COLOURS.seatDropInvalid.fill;
+          seatStroke = COLOURS.seatDropInvalid.stroke;
+        } else if (occupant) {
+          seatFill = COLOURS.seatOccupied.fill;
+          seatStroke = COLOURS.seatOccupied.stroke;
+        } else {
+          seatFill = COLOURS.seatEmpty.fill;
+          seatStroke = COLOURS.seatEmpty.stroke;
+        }
+
+        if (occupant && selectedGuestIds.includes(occupant.id) && !isSourceSeat && !isDropTarget) {
+          seatStroke = '#2563EB';
+        }
+
+        const firstName = occupant?.name.split(' ')[0] ?? '';
+
+        return (
+          <Group key={`seat-${idx}`} x={seat.x} y={seat.y}>
+            <Circle
+              radius={SEAT_RENDER_RADIUS}
+              fill={seatFill}
+              stroke={seatStroke}
+              strokeWidth={strokeWidth}
+              onMouseDown={(e) => {
+                if (occupant && e.evt.button === 0) {
+                  onSeatDragStart(occupant.id, occupant.name, table.id, idx, e);
+                }
+              }}
+              onTouchStart={(e) => {
+                if (occupant) {
+                  onSeatDragStart(occupant.id, occupant.name, table.id, idx, e);
+                }
+              }}
+              onClick={() => {
+                if (occupant && !seatDragRef.current) {
+                  onSeatClick(occupant.id, table.position.x + seat.x, table.position.y + seat.y);
+                }
+              }}
+              onTap={() => {
+                if (occupant && !seatDragRef.current) {
+                  onSeatClick(occupant.id, table.position.x + seat.x, table.position.y + seat.y);
+                }
+              }}
+              onMouseEnter={(e) => {
+                const container = e.target.getStage()?.container();
+                if (container) {
+                  container.style.cursor = occupant ? 'grab' : 'default';
+                }
+              }}
+              onMouseLeave={(e) => {
+                const container = e.target.getStage()?.container();
+                if (container) container.style.cursor = 'default';
+              }}
+            />
+            {occupant && !isSourceSeat && (
+              <Text
+                text={firstName}
+                x={-SEAT_RENDER_RADIUS}
+                y={SEAT_RENDER_RADIUS + 2}
+                width={SEAT_RENDER_RADIUS * 2}
+                align="center"
+                fontSize={8}
+                fill="#334155"
+                listening={false}
+              />
+            )}
+          </Group>
+        );
+      })}
+
+      {/* Violation warning badge */}
+      {hasViolation && (
+        <Group x={table.width / 2 - 8} y={-table.height / 2 - 8}>
+          <Circle radius={8} fill={COLOURS.warningBg} stroke={COLOURS.warningStroke} strokeWidth={1.5} />
+          <Text
+            text="!"
+            x={-4}
+            y={-5}
+            width={8}
+            align="center"
+            fontSize={10}
+            fontStyle="bold"
+            fill={COLOURS.warningStroke}
+            listening={false}
+          />
+        </Group>
+      )}
+    </Group>
+  );
+}, areTablePropsEqual);
+
+/* ------------------------------------------------------------------ */
+/*  SeatingCanvasInner — main canvas component                        */
+/* ------------------------------------------------------------------ */
+
 export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCanvasInnerProps>(function SeatingCanvasInner({ showConstraints, draggedGuestId }, ref) {
   const guests = useSeatingStore((s) => s.guests);
   const venue = useSeatingStore((s) => s.venue);
@@ -63,7 +307,7 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
   const selectedTableId = useSeatingStore((s) => s.selectedTableId);
   const setSelectedTableId = useSeatingStore((s) => s.setSelectedTableId);
 
-  const { zoom, panOffset, handleWheel, handleMouseDown, handleMouseMove, handleMouseUp } =
+  const { zoom, panOffset, handleWheel, handleMouseDown, handleMouseMove, handleMouseUp, handleTouchStart, handleTouchMove, handleTouchEnd } =
     useCanvasInteraction();
 
   const [contextMenu, setContextMenu] = useState<{
@@ -156,9 +400,6 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
     return lines;
   }, [venue.showGrid, venue.gridSize, seatingPxPerUnit, roomRects]);
 
-  const roomPixelWidth = venue.roomWidth * seatingPxPerUnit;
-  const roomPixelLength = venue.roomLength * seatingPxPerUnit;
-
   // Pre-compute all seat positions in canvas (absolute) coords for drop target detection
   const allSeats = useMemo(() => {
     const result: {
@@ -210,9 +451,11 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
     return findNearestSeat(seatDrag.canvasX, seatDrag.canvasY, seatDrag.guestId);
   }, [seatDrag, findNearestSeat]);
 
-  // Constraint lines between guest pairs
+  // Constraint lines between guest pairs (uses tableMap for O(1) lookups)
   const constraintLines = useMemo(() => {
     if (!showConstraints) return [];
+
+    const tableMap = new Map(venue.tables.map((t) => [t.id, t]));
 
     const lines: {
       key: string;
@@ -229,8 +472,8 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
       if (!guestA?.tableId || guestA.seatIndex === null) continue;
       if (!guestB?.tableId || guestB.seatIndex === null) continue;
 
-      const tableA = venue.tables.find((t) => t.id === guestA.tableId);
-      const tableB = venue.tables.find((t) => t.id === guestB.tableId);
+      const tableA = tableMap.get(guestA.tableId);
+      const tableB = tableMap.get(guestB.tableId);
       if (!tableA || !tableB) continue;
 
       const seatsA = getSeatPositions(tableA.shape, tableA.capacity, tableA.width, tableA.height, tableA.seatingSide, tableA.endSeats);
@@ -260,7 +503,7 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
 
   // --- Seat drag-and-drop handlers ---
   const handleSeatDragStart = useCallback(
-    (guestId: string, guestName: string, tableId: string, seatIdx: number, e: Konva.KonvaEventObject<MouseEvent>) => {
+    (guestId: string, guestName: string, tableId: string, seatIdx: number, e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
       e.cancelBubble = true;
       const stage = e.target.getStage();
       if (!stage) return;
@@ -287,7 +530,7 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
   );
 
   const handleStageMoveForDrag = useCallback(
-    (e: Konva.KonvaEventObject<MouseEvent>) => {
+    (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
       if (!seatDragRef.current) return;
       didDragMove.current = true;
       const stage = e.target.getStage();
@@ -351,6 +594,28 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
     [handleStageUpForDrag, handleMouseUp]
   );
 
+  // Combined touch handlers (seat drag takes priority over pan)
+  const handleCombinedTouchMove = useCallback(
+    (e: Konva.KonvaEventObject<TouchEvent>) => {
+      if (seatDragRef.current) {
+        handleStageMoveForDrag(e);
+      } else {
+        handleTouchMove(e);
+      }
+    },
+    [handleStageMoveForDrag, handleTouchMove]
+  );
+
+  const handleCombinedTouchEnd = useCallback(
+    (e: Konva.KonvaEventObject<TouchEvent>) => {
+      if (seatDragRef.current) {
+        handleStageUpForDrag();
+      }
+      handleTouchEnd();
+    },
+    [handleStageUpForDrag, handleTouchEnd]
+  );
+
   // Handle click on occupied seat (context menu)
   const handleSeatClick = useCallback(
     (guestId: string, stageX: number, stageY: number) => {
@@ -381,224 +646,32 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
     [contextMenu, setSelectedTableId]
   );
 
-  const renderTable = useCallback(
-    (table: Table) => {
-      const seats = getSeatPositions(table.shape, table.capacity, table.width, table.height, table.seatingSide, table.endSeats);
-      const tableOccupants = seatOccupants.get(table.id);
-      const isFull = (tableOccupants?.size ?? 0) >= table.capacity;
-      const hasViolation = violatedTableIds.has(table.id);
-      const isSelected = selectedTableId === table.id;
-      const isDraggingFromList = !!draggedGuestId;
-      const hasNoSeats = table.capacity === 0;
+  // Pre-compute per-table derived data so SeatingTableGroup can be memoized
+  const tableDataMap = useMemo(() => {
+    const map = new Map<string, { tableOccupants: Map<number, Guest> | undefined; isFull: boolean; hasViolation: boolean }>();
+    for (const table of venue.tables) {
+      const tableOcc = seatOccupants.get(table.id);
+      map.set(table.id, {
+        tableOccupants: tableOcc,
+        isFull: (tableOcc?.size ?? 0) >= table.capacity,
+        hasViolation: violatedTableIds.has(table.id),
+      });
+    }
+    return map;
+  }, [venue.tables, seatOccupants, violatedTableIds]);
 
-      return (
-        <Group
-          key={table.id}
-          x={table.position.x}
-          y={table.position.y}
-          rotation={table.rotation}
-          onClick={() => {
-            setSelectedTableId(table.id);
-            if (hasNoSeats) {
-              setAddSeatsPopover({
-                tableId: table.id,
-                x: table.position.x,
-                y: table.position.y,
-              });
-            } else {
-              setAddSeatsPopover(null);
-            }
-          }}
-        >
-          {/* Table shape */}
-          {table.shape === 'round' || table.shape === 'cocktail' ? (
-            <Circle
-              radius={table.width / 2}
-              fill={COLOURS.tableFill}
-              stroke={isSelected ? '#2563EB' : COLOURS.tableStroke}
-              strokeWidth={isSelected ? 2 : 1}
-            />
-          ) : (
-            <Rect
-              x={-table.width / 2}
-              y={-table.height / 2}
-              width={table.width}
-              height={table.height}
-              cornerRadius={4}
-              fill={COLOURS.tableFill}
-              stroke={isSelected ? '#2563EB' : COLOURS.tableStroke}
-              strokeWidth={isSelected ? 2 : 1}
-            />
-          )}
+  const isDraggingFromList = !!draggedGuestId;
 
-          {/* Table label */}
-          <Text
-            text={table.label}
-            x={-table.width / 2}
-            y={hasNoSeats ? -14 : -6}
-            width={table.width}
-            align="center"
-            fontSize={11}
-            fontStyle="600"
-            fill="#475569"
-          />
-
-          {/* "Click to add seats" prompt for zero-capacity tables */}
-          {hasNoSeats && (
-            <Text
-              text="Click to add seats"
-              x={-table.width / 2}
-              y={4}
-              width={table.width}
-              align="center"
-              fontSize={9}
-              fill="#94a3b8"
-              listening={false}
-            />
-          )}
-
-          {/* Seats */}
-          {seats.map((seat, idx) => {
-            const occupant = tableOccupants?.get(idx);
-            const isSourceSeat =
-              seatDrag?.sourceTableId === table.id && seatDrag?.sourceSeatIdx === idx;
-            const isDropTarget =
-              dragTargetSeat?.seat.tableId === table.id &&
-              dragTargetSeat?.seat.seatIdx === idx &&
-              !!seatDrag;
-
-            let seatFill: string;
-            let seatStroke: string;
-            let strokeWidth = 1.5;
-
-            if (isSourceSeat) {
-              // The seat being dragged from — show as dimmed
-              seatFill = COLOURS.seatDragSource.fill;
-              seatStroke = COLOURS.seatDragSource.stroke;
-              strokeWidth = 2;
-            } else if (isDropTarget) {
-              // Potential drop target
-              if (occupant && occupant.id !== seatDrag?.guestId) {
-                // Swap target
-                seatFill = COLOURS.seatSwapTarget.fill;
-                seatStroke = COLOURS.seatSwapTarget.stroke;
-                strokeWidth = 2.5;
-              } else {
-                // Empty target
-                seatFill = COLOURS.seatDropValid.fill;
-                seatStroke = COLOURS.seatDropValid.stroke;
-                strokeWidth = 2.5;
-              }
-            } else if (isDraggingFromList && !occupant && !isFull) {
-              seatFill = COLOURS.seatDropValid.fill;
-              seatStroke = COLOURS.seatDropValid.stroke;
-            } else if (isDraggingFromList && isFull && !occupant) {
-              seatFill = COLOURS.seatDropInvalid.fill;
-              seatStroke = COLOURS.seatDropInvalid.stroke;
-            } else if (occupant) {
-              seatFill = COLOURS.seatOccupied.fill;
-              seatStroke = COLOURS.seatOccupied.stroke;
-            } else {
-              seatFill = COLOURS.seatEmpty.fill;
-              seatStroke = COLOURS.seatEmpty.stroke;
-            }
-
-            // Highlight if guest is selected
-            if (occupant && selectedGuestIds.includes(occupant.id) && !isSourceSeat && !isDropTarget) {
-              seatStroke = '#2563EB';
-            }
-
-            const firstName = occupant?.name.split(' ')[0] ?? '';
-
-            return (
-              <Group key={`seat-${idx}`} x={seat.x} y={seat.y}>
-                {/* Seat circle */}
-                <Circle
-                  radius={SEAT_RENDER_RADIUS}
-                  fill={seatFill}
-                  stroke={seatStroke}
-                  strokeWidth={strokeWidth}
-                  onMouseDown={(e) => {
-                    if (occupant && e.evt.button === 0) {
-                      handleSeatDragStart(
-                        occupant.id,
-                        occupant.name,
-                        table.id,
-                        idx,
-                        e
-                      );
-                    }
-                  }}
-                  onClick={() => {
-                    if (occupant && !seatDragRef.current) {
-                      handleSeatClick(
-                        occupant.id,
-                        table.position.x + seat.x,
-                        table.position.y + seat.y
-                      );
-                    }
-                  }}
-                  onMouseEnter={(e) => {
-                    const container = e.target.getStage()?.container();
-                    if (container) {
-                      container.style.cursor = occupant ? 'grab' : 'default';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    const container = e.target.getStage()?.container();
-                    if (container) container.style.cursor = 'default';
-                  }}
-                />
-                {/* Guest name */}
-                {occupant && !isSourceSeat && (
-                  <Text
-                    text={firstName}
-                    x={-SEAT_RENDER_RADIUS}
-                    y={SEAT_RENDER_RADIUS + 2}
-                    width={SEAT_RENDER_RADIUS * 2}
-                    align="center"
-                    fontSize={8}
-                    fill="#334155"
-                    listening={false}
-                  />
-                )}
-              </Group>
-            );
-          })}
-
-          {/* Violation warning badge */}
-          {hasViolation && (
-            <Group x={table.width / 2 - 8} y={-table.height / 2 - 8}>
-              <Circle radius={8} fill={COLOURS.warningBg} stroke={COLOURS.warningStroke} strokeWidth={1.5} />
-              <Text
-                text="!"
-                x={-4}
-                y={-5}
-                width={8}
-                align="center"
-                fontSize={10}
-                fontStyle="bold"
-                fill={COLOURS.warningStroke}
-                listening={false}
-              />
-            </Group>
-          )}
-        </Group>
-      );
+  const handleSelectTable = useCallback(
+    (tableId: string, hasNoSeats: boolean, x: number, y: number) => {
+      setSelectedTableId(tableId);
+      if (hasNoSeats) {
+        setAddSeatsPopover({ tableId, x, y });
+      } else {
+        setAddSeatsPopover(null);
+      }
     },
-    [
-      seatOccupants,
-      violatedTableIds,
-      selectedTableId,
-      draggedGuestId,
-      selectedGuestIds,
-      setSelectedTableId,
-      handleSeatClick,
-      handleSeatDragStart,
-      seatDrag,
-      dragTargetSeat,
-      updateTable,
-    ]
+    [setSelectedTableId]
   );
 
   const stageRef = useRef<Konva.Stage>(null);
@@ -621,6 +694,9 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
         onMouseDown={handleMouseDown}
         onMouseMove={handleCombinedMouseMove}
         onMouseUp={handleCombinedMouseUp}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleCombinedTouchMove}
+        onTouchEnd={handleCombinedTouchEnd}
         onClick={handleStageClick}
       >
         {/* Background layer */}
@@ -669,7 +745,27 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
 
         {/* Tables layer */}
         <Layer>
-          {venue.tables.map(renderTable)}
+          {venue.tables.map((table) => {
+            const data = tableDataMap.get(table.id);
+            return (
+              <SeatingTableGroup
+                key={table.id}
+                table={table}
+                tableOccupants={data?.tableOccupants}
+                isFull={data?.isFull ?? false}
+                hasViolation={data?.hasViolation ?? false}
+                isSelected={selectedTableId === table.id}
+                isDraggingFromList={isDraggingFromList}
+                selectedGuestIds={selectedGuestIds}
+                seatDrag={seatDrag}
+                dragTargetSeat={dragTargetSeat}
+                onSelectTable={handleSelectTable}
+                onSeatDragStart={handleSeatDragStart}
+                onSeatClick={handleSeatClick}
+                seatDragRef={seatDragRef}
+              />
+            );
+          })}
         </Layer>
 
         {/* Constraint lines layer */}

@@ -2,6 +2,8 @@
 
 import { Header } from './Header';
 import { StepNavigation } from './StepNavigation';
+import { DemoOverlay } from './demo/DemoOverlay';
+import { DemoInteractionBlocker } from './demo/DemoInteractionBlocker';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import dynamic from 'next/dynamic';
@@ -37,8 +39,9 @@ function StepLoading() {
 export function SeatingApp() {
   useKeyboardShortcuts();
   const currentStep = useSeatingStore((s) => s.currentStep);
+  const isDemoMode = useSeatingStore((s) => s.isDemoMode);
 
-  const isCheckIn = currentStep === 'check-in';
+  const isCheckIn = currentStep === 'check-in' && !isDemoMode;
 
   if (isCheckIn) {
     return <CheckInStep />;
@@ -48,11 +51,13 @@ export function SeatingApp() {
     <div className="flex flex-col h-screen">
       <Header />
       <StepNavigation />
-      <main className="flex-1 overflow-hidden">
+      <main className="flex-1 overflow-hidden relative">
+        <DemoInteractionBlocker />
         {currentStep === 'guests' && <GuestListStep />}
         {currentStep === 'venue' && <VenueSetupStep />}
         {currentStep === 'seating' && <SeatingStep />}
       </main>
+      <DemoOverlay />
     </div>
   );
 }

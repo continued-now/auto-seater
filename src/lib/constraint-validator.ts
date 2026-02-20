@@ -9,6 +9,7 @@ export function validateConstraints(
 ): ConstraintViolation[] {
   const violations: ConstraintViolation[] = [];
   const guestMap = new Map(guests.map((g) => [g.id, g]));
+  const tableMap = new Map(tables.map((t) => [t.id, t]));
 
   for (const constraint of constraints) {
     const [guestAId, guestBId] = constraint.guestIds;
@@ -21,8 +22,8 @@ export function validateConstraints(
     const sameTable = guestA.tableId === guestB.tableId;
 
     if (constraint.type === 'must-sit-together' && !sameTable) {
-      const tableA = tables.find((t) => t.id === guestA.tableId);
-      const tableB = tables.find((t) => t.id === guestB.tableId);
+      const tableA = tableMap.get(guestA.tableId);
+      const tableB = tableMap.get(guestB.tableId);
       violations.push({
         constraintId: constraint.id,
         tableId: guestA.tableId,
@@ -31,7 +32,7 @@ export function validateConstraints(
     }
 
     if (constraint.type === 'must-not-sit-together' && sameTable) {
-      const table = tables.find((t) => t.id === guestA.tableId);
+      const table = tableMap.get(guestA.tableId);
       violations.push({
         constraintId: constraint.id,
         tableId: guestA.tableId,

@@ -1304,6 +1304,7 @@ export function GuestListStep() {
                       className={`border-b border-slate-100 last:border-0 transition-colors cursor-pointer ${
                         isSelected ? 'bg-blue-50/50' : 'hover:bg-slate-50'
                       }`}
+                      style={{ contentVisibility: 'auto', containIntrinsicSize: '0 48px' }}
                       onClick={() => setDetailGuestId(guest.id)}
                     >
                       <td

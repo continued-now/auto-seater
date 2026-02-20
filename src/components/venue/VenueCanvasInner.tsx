@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { memo, useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { Stage, Layer, Rect, Circle, Group, Line, Text, Arc, Transformer } from 'react-konva';
 import type Konva from 'konva';
 import { useSeatingStore } from '@/stores/useSeatingStore';
@@ -11,9 +11,9 @@ import { computeAlignmentSnap, getBoundsFromPosition, getObjectBounds } from '@/
 import type { AlignmentGuide, RoomBounds } from '@/lib/alignment-engine';
 import { AlignmentGuideLines } from './AlignmentGuideLines';
 import { RoomCenterGuides } from './RoomCenterGuides';
-import { getAllRoomRects, getVenueBoundingBox } from '@/lib/room-geometry';
-import type { RoomRect } from '@/lib/room-geometry';
+import { getAllRoomRects } from '@/lib/room-geometry';
 import type { Table, Fixture, Wall, TableShape } from '@/types/venue';
+import { getSeatPositions } from '@/lib/table-geometry';
 
 interface VenueCanvasInnerProps {
   width: number;
@@ -31,7 +31,7 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
   const updateWall = useSeatingStore((s) => s.updateWall);
   const canvasToolMode = useSeatingStore((s) => s.canvasToolMode);
 
-  const { zoom, panOffset, handleWheel, handleMouseDown: handlePanMouseDown, handleMouseMove: handlePanMouseMove, handleMouseUp: handlePanMouseUp } =
+  const { zoom, panOffset, handleWheel, handleMouseDown: handlePanMouseDown, handleMouseMove: handlePanMouseMove, handleMouseUp: handlePanMouseUp, handleTouchStart: handlePanTouchStart, handleTouchMove: handlePanTouchMove, handleTouchEnd: handlePanTouchEnd } =
     useCanvasInteraction();
   const { snapPosition, gridPixels, pixelsPerUnit } = useGridSnap();
   const { drawingWall, isDrawing, handleMouseDown: handleWallMouseDown, handleMouseMove: handleWallMouseMove, handleMouseUp: handleWallMouseUp } =
@@ -56,7 +56,7 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
 
   const bp = venue.blueprintMode;
 
-  // Room size warning: minimum 3×3 metres (≈10×10 ft)
+  // Room size warning: minimum 3x3 metres (~10x10 ft)
   const minSizeMetres = 3;
   const minSizeFt = 10;
   const minWidth = venue.unit === 'ft' ? minSizeFt : minSizeMetres;
@@ -174,7 +174,7 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
   }, [venue.showGrid, roomRects, gridPixels, bp]);
 
   const getStagePointer = useCallback(
-    (e: Konva.KonvaEventObject<MouseEvent>): { x: number; y: number } | null => {
+    (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>): { x: number; y: number } | null => {
       const stage = stageRef.current;
       if (!stage) return null;
       const pos = stage.getPointerPosition();
@@ -185,6 +185,28 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
       };
     },
     [panOffset, zoom]
+  );
+
+  // Stable selection callbacks for memoized child components
+  const handleSelectTable = useCallback(
+    (tableId: string) => {
+      setSelectedElement(tableId, 'table');
+    },
+    [setSelectedElement]
+  );
+
+  const handleSelectFixture = useCallback(
+    (fixtureId: string) => {
+      setSelectedElement(fixtureId, 'fixture');
+    },
+    [setSelectedElement]
+  );
+
+  const handleSelectWall = useCallback(
+    (wallId: string) => {
+      setSelectedElement(wallId, 'wall');
+    },
+    [setSelectedElement]
   );
 
   const handleTableDragMove = useCallback(
@@ -206,7 +228,7 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
       const lock = snapLockRef.current;
       const escapeThreshold = SNAP_THRESHOLD * ESCAPE_MULTIPLIER;
 
-      // X axis: hysteresis — if locked, only release when raw pos pulls far enough away
+      // X axis: hysteresis -- if locked, only release when raw pos pulls far enough away
       let useSnapX = result.didSnapX;
       if (lock.x !== null) {
         const pullDistance = Math.abs(rawX - lock.x);
@@ -488,6 +510,55 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
     [isDrawing, handleWallMouseUp, handlePanMouseUp]
   );
 
+  // --- Touch handlers for wall drawing + pan fallback ---
+
+  const handleStageTouchStart = useCallback(
+    (e: Konva.KonvaEventObject<TouchEvent>) => {
+      // Wall drawing on touch (single finger only)
+      if (isDrawing && e.evt.touches.length === 1) {
+        const ptr = getStagePointer(e);
+        if (ptr) handleWallMouseDown(ptr.x, ptr.y);
+        return;
+      }
+
+      // If tapping on empty stage, deselect
+      if (e.target === e.target.getStage()) {
+        clearSelection();
+      }
+
+      handlePanTouchStart(e);
+    },
+    [isDrawing, getStagePointer, handleWallMouseDown, clearSelection, handlePanTouchStart]
+  );
+
+  const handleStageTouchMove = useCallback(
+    (e: Konva.KonvaEventObject<TouchEvent>) => {
+      if (isDrawing && drawingWall && e.evt.touches.length === 1) {
+        const ptr = getStagePointer(e);
+        if (ptr) handleWallMouseMove(ptr.x, ptr.y);
+        return;
+      }
+      handlePanTouchMove(e);
+    },
+    [isDrawing, drawingWall, getStagePointer, handleWallMouseMove, handlePanTouchMove]
+  );
+
+  const handleStageTouchEnd = useCallback(
+    () => {
+      if (isDrawing) {
+        handleWallMouseUp();
+        return;
+      }
+      handlePanTouchEnd();
+    },
+    [isDrawing, handleWallMouseUp, handlePanTouchEnd]
+  );
+
+  // Suppress unused var warnings for items used indirectly
+  void selectedElementType;
+  void canvasToolMode;
+  void roomBounds;
+
   return (
     <div style={{ position: 'relative', width, height }}>
     <Stage
@@ -502,9 +573,12 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
       onMouseDown={handleStageMouseDown}
       onMouseMove={handleStageMouseMove}
       onMouseUp={handleStageMouseUp}
+      onTouchStart={handleStageTouchStart}
+      onTouchMove={handleStageTouchMove}
+      onTouchEnd={handleStageTouchEnd}
       style={{ cursor: isDrawing ? 'crosshair' : 'default' }}
     >
-      {/* Layer 1: Background — multi-room fills + grids + boundaries + room center guides */}
+      {/* Layer 1: Background -- multi-room fills + grids + boundaries + room center guides */}
       <Layer listening={false}>
         {/* Room backgrounds */}
         {roomRects.map((room) => (
@@ -634,14 +708,14 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
             <Text
               x={Math.max(roomWidthPx / 2 - 118, -118)}
               y={Math.max(roomLengthPx / 2 - 16, -16)}
-              text="⚠"
+              text="Warning"
               fontSize={16}
               listening={false}
             />
             <Text
               x={Math.max(roomWidthPx / 2 - 96, -96)}
               y={Math.max(roomLengthPx / 2 - 18, -18)}
-              text={`Room must be at least\n${minSizeMetres}×${minSizeMetres}m (${minSizeFt}×${minSizeFt}ft)`}
+              text={`Room must be at least\n${minSizeMetres}x${minSizeMetres}m (${minSizeFt}x${minSizeFt}ft)`}
               fontSize={12}
               fontFamily="system-ui, sans-serif"
               fontStyle="500"
@@ -656,11 +730,11 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
       {/* Layer 2: Walls */}
       <Layer>
         {venue.walls.map((wall) => (
-          <WallShape
+          <MemoWallShape
             key={wall.id}
             wall={wall}
             isSelected={wall.id === selectedElementId}
-            onSelect={() => setSelectedElement(wall.id, 'wall')}
+            onSelect={handleSelectWall}
             onDragEnd={handleWallDragEnd}
             blueprint={bp}
           />
@@ -670,11 +744,11 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
       {/* Layer 3: Fixtures */}
       <Layer>
         {venue.fixtures.map((fixture) => (
-          <FixtureShape
+          <MemoFixtureShape
             key={fixture.id}
             fixture={fixture}
             isSelected={fixture.id === selectedElementId}
-            onSelect={() => setSelectedElement(fixture.id, 'fixture')}
+            onSelect={handleSelectFixture}
             onDragMove={handleFixtureDragMove}
             onDragEnd={handleFixtureDragEnd}
             blueprint={bp}
@@ -685,11 +759,11 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
       {/* Layer 4: Tables */}
       <Layer>
         {venue.tables.map((table) => (
-          <TableGroup
+          <MemoTableGroup
             key={table.id}
             table={table}
             isSelected={table.id === selectedElementId}
-            onSelect={() => setSelectedElement(table.id, 'table')}
+            onSelect={handleSelectTable}
             onDragMove={handleTableDragMove}
             onDragEnd={handleTableDragEnd}
             onDblClick={handleTableDblClick}
@@ -701,7 +775,7 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
         ))}
       </Layer>
 
-      {/* Layer 5: Overlay — Alignment guides + Transformer + wall drawing preview */}
+      {/* Layer 5: Overlay -- Alignment guides + Transformer + wall drawing preview */}
       <Layer>
         {activeGuides.length > 0 && <AlignmentGuideLines guides={activeGuides} />}
         {selectionGlow && (
@@ -796,12 +870,25 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
 function isTableOutOfBounds(table: Table, roomW: number, roomL: number): boolean {
   const hw = table.width / 2;
   const hh = table.height / 2;
-  // Use axis-aligned bounding box (ignoring rotation for simplicity — catches most cases)
+  // Use axis-aligned bounding box (ignoring rotation for simplicity -- catches most cases)
   const left = table.position.x - hw;
   const right = table.position.x + hw;
   const top = table.position.y - hh;
   const bottom = table.position.y + hh;
   return left < 0 || top < 0 || right > roomW || bottom > roomL;
+}
+
+interface TableGroupProps {
+  table: Table;
+  isSelected: boolean;
+  onSelect: (tableId: string) => void;
+  onDragMove: (tableId: string, e: Konva.KonvaEventObject<DragEvent>) => void;
+  onDragEnd: (tableId: string, e: Konva.KonvaEventObject<DragEvent>) => void;
+  onDblClick: (tableId: string) => void;
+  blueprint: boolean;
+  roomWidthPx: number;
+  roomLengthPx: number;
+  isEditing: boolean;
 }
 
 function TableGroup({
@@ -815,22 +902,34 @@ function TableGroup({
   roomWidthPx,
   roomLengthPx,
   isEditing,
-}: {
-  table: Table;
-  isSelected: boolean;
-  onSelect: () => void;
-  onDragMove: (tableId: string, e: Konva.KonvaEventObject<DragEvent>) => void;
-  onDragEnd: (tableId: string, e: Konva.KonvaEventObject<DragEvent>) => void;
-  onDblClick: (tableId: string) => void;
-  blueprint: boolean;
-  roomWidthPx: number;
-  roomLengthPx: number;
-  isEditing: boolean;
-}) {
+}: TableGroupProps) {
   const outOfBounds = useMemo(
     () => isTableOutOfBounds(table, roomWidthPx, roomLengthPx),
     [table, roomWidthPx, roomLengthPx]
   );
+
+  const handleClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+    e.cancelBubble = true;
+    onSelect(table.id);
+  }, [onSelect, table.id]);
+
+  const handleTap = useCallback((e: Konva.KonvaEventObject<Event>) => {
+    e.cancelBubble = true;
+    onSelect(table.id);
+  }, [onSelect, table.id]);
+
+  const handleDblClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+    e.cancelBubble = true;
+    onDblClick(table.id);
+  }, [onDblClick, table.id]);
+
+  const handleDragMove = useCallback((e: Konva.KonvaEventObject<DragEvent>) => {
+    onDragMove(table.id, e);
+  }, [onDragMove, table.id]);
+
+  const handleDragEnd = useCallback((e: Konva.KonvaEventObject<DragEvent>) => {
+    onDragEnd(table.id, e);
+  }, [onDragEnd, table.id]);
 
   return (
     <Group
@@ -839,28 +938,35 @@ function TableGroup({
       y={table.position.y}
       rotation={table.rotation}
       draggable
-      onClick={(e) => {
-        e.cancelBubble = true;
-        onSelect();
-      }}
-      onTap={(e) => {
-        e.cancelBubble = true;
-        onSelect();
-      }}
-      onDblClick={(e) => {
-        e.cancelBubble = true;
-        onDblClick(table.id);
-      }}
-      onDragMove={(e) => onDragMove(table.id, e)}
-      onDragEnd={(e) => onDragEnd(table.id, e)}
+      onClick={handleClick}
+      onTap={handleTap}
+      onDblClick={handleDblClick}
+      onDragMove={handleDragMove}
+      onDragEnd={handleDragEnd}
     >
-      <TableShapeRenderer
+      <MemoTableShapeRenderer
         shape={table.shape}
         width={table.width}
         height={table.height}
         blueprint={blueprint}
         outOfBounds={outOfBounds}
       />
+
+      {/* Seat position circles */}
+      {table.capacity > 0 &&
+        getSeatPositions(table.shape, table.capacity, table.width, table.height, table.seatingSide, table.endSeats).map((seat, i) => (
+          <Circle
+            key={i}
+            x={seat.x}
+            y={seat.y}
+            radius={10}
+            fill="#e2e8f0"
+            stroke="#94a3b8"
+            strokeWidth={1}
+            listening={false}
+          />
+        ))
+      }
 
       {/* Seat capacity count */}
       <Text
@@ -896,19 +1002,45 @@ function TableGroup({
   );
 }
 
+const MemoTableGroup = memo(TableGroup, (prev, next) =>
+  prev.table.id === next.table.id &&
+  prev.table.position.x === next.table.position.x &&
+  prev.table.position.y === next.table.position.y &&
+  prev.table.width === next.table.width &&
+  prev.table.height === next.table.height &&
+  prev.table.rotation === next.table.rotation &&
+  prev.table.shape === next.table.shape &&
+  prev.table.label === next.table.label &&
+  prev.table.capacity === next.table.capacity &&
+  prev.table.seatingSide === next.table.seatingSide &&
+  prev.table.endSeats === next.table.endSeats &&
+  prev.table.assignedGuestIds === next.table.assignedGuestIds &&
+  prev.isSelected === next.isSelected &&
+  prev.isEditing === next.isEditing &&
+  prev.blueprint === next.blueprint &&
+  prev.roomWidthPx === next.roomWidthPx &&
+  prev.roomLengthPx === next.roomLengthPx &&
+  prev.onSelect === next.onSelect &&
+  prev.onDragMove === next.onDragMove &&
+  prev.onDragEnd === next.onDragEnd &&
+  prev.onDblClick === next.onDblClick
+);
+
+interface TableShapeRendererProps {
+  shape: TableShape;
+  width: number;
+  height: number;
+  blueprint: boolean;
+  outOfBounds: boolean;
+}
+
 function TableShapeRenderer({
   shape,
   width,
   height,
   blueprint,
   outOfBounds,
-}: {
-  shape: TableShape;
-  width: number;
-  height: number;
-  blueprint: boolean;
-  outOfBounds: boolean;
-}) {
+}: TableShapeRendererProps) {
   const fill = outOfBounds ? '#FEE2E2' : (blueprint ? 'transparent' : '#f8fafc');
   const stroke = outOfBounds ? '#DC2626' : (blueprint ? '#1a56db' : '#94a3b8');
 
@@ -940,6 +1072,14 @@ function TableShapeRenderer({
       );
   }
 }
+
+const MemoTableShapeRenderer = memo(TableShapeRenderer, (prev, next) =>
+  prev.shape === next.shape &&
+  prev.width === next.width &&
+  prev.height === next.height &&
+  prev.blueprint === next.blueprint &&
+  prev.outOfBounds === next.outOfBounds
+);
 
 // --- Fixture rendering ---
 
@@ -1073,6 +1213,15 @@ function DoorStyleIndicator({
   }
 }
 
+interface FixtureShapeProps {
+  fixture: Fixture;
+  isSelected: boolean;
+  onSelect: (fixtureId: string) => void;
+  onDragMove: (fixtureId: string, e: Konva.KonvaEventObject<DragEvent>) => void;
+  onDragEnd: (fixtureId: string, e: Konva.KonvaEventObject<DragEvent>) => void;
+  blueprint: boolean;
+}
+
 function FixtureShape({
   fixture,
   isSelected,
@@ -1080,17 +1229,28 @@ function FixtureShape({
   onDragMove,
   onDragEnd,
   blueprint,
-}: {
-  fixture: Fixture;
-  isSelected: boolean;
-  onSelect: () => void;
-  onDragMove: (fixtureId: string, e: Konva.KonvaEventObject<DragEvent>) => void;
-  onDragEnd: (fixtureId: string, e: Konva.KonvaEventObject<DragEvent>) => void;
-  blueprint: boolean;
-}) {
+}: FixtureShapeProps) {
   const fill = blueprint ? 'transparent' : '#f1f5f9';
   const stroke = blueprint ? '#1a56db' : '#94a3b8';
   const isDoorType = fixture.type === 'door' || fixture.type === 'entrance' || fixture.type === 'exit';
+
+  const handleClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+    e.cancelBubble = true;
+    onSelect(fixture.id);
+  }, [onSelect, fixture.id]);
+
+  const handleTap = useCallback((e: Konva.KonvaEventObject<Event>) => {
+    e.cancelBubble = true;
+    onSelect(fixture.id);
+  }, [onSelect, fixture.id]);
+
+  const handleDragMove = useCallback((e: Konva.KonvaEventObject<DragEvent>) => {
+    onDragMove(fixture.id, e);
+  }, [onDragMove, fixture.id]);
+
+  const handleDragEnd = useCallback((e: Konva.KonvaEventObject<DragEvent>) => {
+    onDragEnd(fixture.id, e);
+  }, [onDragEnd, fixture.id]);
 
   return (
     <Group
@@ -1099,16 +1259,10 @@ function FixtureShape({
       y={fixture.position.y}
       rotation={fixture.rotation}
       draggable
-      onClick={(e) => {
-        e.cancelBubble = true;
-        onSelect();
-      }}
-      onTap={(e) => {
-        e.cancelBubble = true;
-        onSelect();
-      }}
-      onDragMove={(e) => onDragMove(fixture.id, e)}
-      onDragEnd={(e) => onDragEnd(fixture.id, e)}
+      onClick={handleClick}
+      onTap={handleTap}
+      onDragMove={handleDragMove}
+      onDragEnd={handleDragEnd}
     >
       {isDoorType ? (
         <>
@@ -1177,7 +1331,32 @@ function FixtureShape({
   );
 }
 
+const MemoFixtureShape = memo(FixtureShape, (prev, next) =>
+  prev.fixture.id === next.fixture.id &&
+  prev.fixture.position.x === next.fixture.position.x &&
+  prev.fixture.position.y === next.fixture.position.y &&
+  prev.fixture.width === next.fixture.width &&
+  prev.fixture.height === next.fixture.height &&
+  prev.fixture.rotation === next.fixture.rotation &&
+  prev.fixture.type === next.fixture.type &&
+  prev.fixture.label === next.fixture.label &&
+  prev.fixture.doorStyle === next.fixture.doorStyle &&
+  prev.isSelected === next.isSelected &&
+  prev.blueprint === next.blueprint &&
+  prev.onSelect === next.onSelect &&
+  prev.onDragMove === next.onDragMove &&
+  prev.onDragEnd === next.onDragEnd
+);
+
 // --- Wall rendering ---
+
+interface WallShapeProps {
+  wall: Wall;
+  isSelected: boolean;
+  onSelect: (wallId: string) => void;
+  onDragEnd: (wallId: string, e: Konva.KonvaEventObject<DragEvent>) => void;
+  blueprint: boolean;
+}
 
 function WallShape({
   wall,
@@ -1185,13 +1364,7 @@ function WallShape({
   onSelect,
   onDragEnd,
   blueprint,
-}: {
-  wall: Wall;
-  isSelected: boolean;
-  onSelect: () => void;
-  onDragEnd: (wallId: string, e: Konva.KonvaEventObject<DragEvent>) => void;
-  blueprint: boolean;
-}) {
+}: WallShapeProps) {
   const dx = wall.end.x - wall.start.x;
   const dy = wall.end.y - wall.start.y;
   const length = Math.sqrt(dx * dx + dy * dy);
@@ -1203,21 +1376,32 @@ function WallShape({
   const stroke = blueprint ? '#1a56db' : '#475569';
   const fill = blueprint ? '#1a56db' : (isPartition ? '#94a3b8' : '#475569');
 
+  const handleClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+    e.cancelBubble = true;
+    onSelect(wall.id);
+  }, [onSelect, wall.id]);
+
+  const handleTap = useCallback((e: Konva.KonvaEventObject<Event>) => {
+    e.cancelBubble = true;
+    onSelect(wall.id);
+  }, [onSelect, wall.id]);
+
+  const handleDragEnd = useCallback((e: Konva.KonvaEventObject<DragEvent>) => {
+    onDragEnd(wall.id, e);
+  }, [onDragEnd, wall.id]);
+
+  // Suppress unused var warning
+  void isSelected;
+
   return (
     <Group
       id={wall.id}
       x={0}
       y={0}
       draggable
-      onClick={(e) => {
-        e.cancelBubble = true;
-        onSelect();
-      }}
-      onTap={(e) => {
-        e.cancelBubble = true;
-        onSelect();
-      }}
-      onDragEnd={(e) => onDragEnd(wall.id, e)}
+      onClick={handleClick}
+      onTap={handleTap}
+      onDragEnd={handleDragEnd}
     >
       <Rect
         x={midX - length / 2}
@@ -1245,3 +1429,19 @@ function WallShape({
     </Group>
   );
 }
+
+const MemoWallShape = memo(WallShape, (prev, next) =>
+  prev.wall.id === next.wall.id &&
+  prev.wall.start.x === next.wall.start.x &&
+  prev.wall.start.y === next.wall.start.y &&
+  prev.wall.end.x === next.wall.end.x &&
+  prev.wall.end.y === next.wall.end.y &&
+  prev.wall.thickness === next.wall.thickness &&
+  prev.wall.style === next.wall.style &&
+  prev.wall.label === next.wall.label &&
+  prev.wall.rotation === next.wall.rotation &&
+  prev.isSelected === next.isSelected &&
+  prev.blueprint === next.blueprint &&
+  prev.onSelect === next.onSelect &&
+  prev.onDragEnd === next.onDragEnd
+);

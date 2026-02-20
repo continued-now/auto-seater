@@ -68,6 +68,10 @@ export function SeatingStep() {
   const [draggedGuestId, setDraggedGuestId] = useState<string | null>(null);
   const [bulkTableId, setBulkTableId] = useState<string | null>(null);
   const [showBulkSelect, setShowBulkSelect] = useState(false);
+  const [guestPanelOpen, setGuestPanelOpen] = useState(false);
+  const [touchDragGuest, setTouchDragGuest] = useState<{ guestId: string; x: number; y: number } | null>(null);
+  const touchStartRef = useRef<{ guestId: string; startX: number; startY: number } | null>(null);
+  const touchDragPos = useRef<{ x: number; y: number } | null>(null);
   const canvasWrapperRef = useRef<HTMLDivElement>(null);
   const canvasInnerRef = useRef<SeatingCanvasInnerHandle>(null);
   const stageRef = useRef<Konva.Stage | null>(null);
@@ -182,6 +186,88 @@ export function SeatingStep() {
     [venue.tables, guests, assignGuestToTable]
   );
 
+  // --- Shared seat-finding logic for drop/touch ---
+  const findAndAssignSeat = useCallback(
+    (clientX: number, clientY: number, guestId: string) => {
+      if (!canvasWrapperRef.current) return;
+      const rect = canvasWrapperRef.current.getBoundingClientRect();
+      const currentPanOffset = useSeatingStore.getState().panOffset;
+      const currentZoom = useSeatingStore.getState().zoom;
+
+      const canvasX = (clientX - rect.left - currentPanOffset.x) / currentZoom;
+      const canvasY = (clientY - rect.top - currentPanOffset.y) / currentZoom;
+
+      let bestDist = Infinity;
+      let bestTable: Table | null = null;
+      let bestSeatIdx = -1;
+
+      for (const table of venue.tables) {
+        const seats = getSeatPositions(table.shape, table.capacity, table.width, table.height);
+        for (let i = 0; i < seats.length; i++) {
+          const seatX = table.position.x + seats[i].x;
+          const seatY = table.position.y + seats[i].y;
+          const dist = Math.hypot(canvasX - seatX, canvasY - seatY);
+
+          const occupant = guests.find((g) => g.tableId === table.id && g.seatIndex === i);
+          if (occupant && occupant.id !== guestId) continue;
+
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestTable = table;
+            bestSeatIdx = i;
+          }
+        }
+      }
+
+      const maxDropDist = 80 / currentZoom;
+      if (bestTable && bestSeatIdx >= 0 && bestDist < maxDropDist) {
+        assignGuestToTable(guestId, bestTable.id, bestSeatIdx);
+      }
+    },
+    [venue.tables, guests, assignGuestToTable]
+  );
+
+  // --- Touch drag handlers for guest list items ---
+  const handleGuestTouchStart = useCallback(
+    (e: React.TouchEvent<HTMLDivElement>, guestId: string) => {
+      const touch = e.touches[0];
+      touchStartRef.current = { guestId, startX: touch.clientX, startY: touch.clientY };
+      touchDragPos.current = null;
+    },
+    []
+  );
+
+  const handleGuestTouchMove = useCallback(
+    (e: React.TouchEvent<HTMLDivElement>) => {
+      if (!touchStartRef.current) return;
+      const touch = e.touches[0];
+      const dx = Math.abs(touch.clientX - touchStartRef.current.startX);
+      const dy = Math.abs(touch.clientY - touchStartRef.current.startY);
+      // Only start drag after a small movement threshold to avoid accidental drags
+      if (dx < 8 && dy < 8 && !touchDragPos.current) return;
+
+      e.preventDefault();
+      touchDragPos.current = { x: touch.clientX, y: touch.clientY };
+      setTouchDragGuest({
+        guestId: touchStartRef.current.guestId,
+        x: touch.clientX,
+        y: touch.clientY,
+      });
+      setDraggedGuestId(touchStartRef.current.guestId);
+    },
+    []
+  );
+
+  const handleGuestTouchEnd = useCallback(() => {
+    if (touchDragPos.current && touchStartRef.current) {
+      findAndAssignSeat(touchDragPos.current.x, touchDragPos.current.y, touchStartRef.current.guestId);
+    }
+    touchStartRef.current = null;
+    touchDragPos.current = null;
+    setTouchDragGuest(null);
+    setDraggedGuestId(null);
+  }, [findAndAssignSeat]);
+
   // --- Selection helpers ---
   const allSelected =
     filteredGuests.length > 0 &&
@@ -243,17 +329,37 @@ export function SeatingStep() {
   return (
     <TooltipProvider>
       <div className="flex h-full overflow-hidden">
+        {/* Backdrop overlay for mobile guest panel */}
+        {guestPanelOpen && (
+          <div
+            className="fixed inset-0 bg-black/20 z-30 lg:hidden"
+            onClick={() => setGuestPanelOpen(false)}
+          />
+        )}
+
         {/* Left Panel - Guest List */}
-        <div className="w-80 flex-shrink-0 border-r border-slate-200 bg-white flex flex-col">
+        <div
+          className={`fixed inset-y-0 left-0 z-40 w-72 bg-white border-r border-slate-200 flex flex-col transform transition-transform duration-200 ${
+            guestPanelOpen ? 'translate-x-0' : '-translate-x-full'
+          } lg:relative lg:translate-x-0 lg:w-80 lg:flex-shrink-0`}
+        >
           {/* Header */}
           <div className="p-3 border-b border-slate-200">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-semibold text-slate-900">Guests</h3>
-              {unseatedCount > 0 && (
-                <Badge color="#D97706" bgColor="#FEF3C7">
-                  {unseatedCount} unassigned
-                </Badge>
-              )}
+              <div className="flex items-center gap-2">
+                {unseatedCount > 0 && (
+                  <Badge color="#D97706" bgColor="#FEF3C7">
+                    {unseatedCount} unassigned
+                  </Badge>
+                )}
+                <button
+                  className="lg:hidden p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                  onClick={() => setGuestPanelOpen(false)}
+                >
+                  <X size={16} />
+                </button>
+              </div>
             </div>
 
             {/* Search */}
@@ -320,6 +426,10 @@ export function SeatingStep() {
                     draggable
                     onDragStart={(e) => handleDragStart(e, guest.id)}
                     onDragEnd={handleDragEnd}
+                    onTouchStart={(e) => handleGuestTouchStart(e, guest.id)}
+                    onTouchMove={handleGuestTouchMove}
+                    onTouchEnd={handleGuestTouchEnd}
+                    style={{ contentVisibility: 'auto', containIntrinsicSize: '0 48px' }}
                     className={`flex items-center gap-2 px-3 py-2 border-b border-slate-50 cursor-grab active:cursor-grabbing transition-all ${
                       isDragging ? 'opacity-40 scale-95' : ''
                     } ${isSelected ? 'bg-blue-50' : 'hover:bg-slate-50'}`}
@@ -381,7 +491,22 @@ export function SeatingStep() {
         {/* Right Panel - Canvas */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Toolbar */}
-          <div className="h-10 border-b border-slate-200 bg-white flex items-center gap-1 px-3">
+          <div className="h-10 border-b border-slate-200 bg-white flex items-center gap-1 px-3 overflow-x-auto">
+            {/* Guest panel toggle (mobile only) */}
+            <button
+              className="lg:hidden relative flex items-center justify-center p-1.5 rounded-md hover:bg-slate-100 text-slate-600 transition-colors cursor-pointer flex-shrink-0"
+              onClick={() => setGuestPanelOpen(true)}
+            >
+              <Users className="w-4 h-4" />
+              {unseatedCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 flex items-center justify-center rounded-full bg-amber-500 text-white text-[10px] font-bold px-1">
+                  {unseatedCount}
+                </span>
+              )}
+            </button>
+
+            <div className="w-px h-5 bg-slate-200 mx-1 lg:hidden flex-shrink-0" />
+
             <Tooltip content="Zoom in">
               <Button
                 variant="ghost"
@@ -422,7 +547,7 @@ export function SeatingStep() {
                 onClick={() => setShowConstraints(!showConstraints)}
               >
                 <Link size={14} />
-                <span className="ml-1">Constraints</span>
+                <span className="ml-1 hidden sm:inline">Constraints</span>
               </Button>
             </Tooltip>
 
@@ -448,7 +573,7 @@ export function SeatingStep() {
                 disabled={unseatedCount === 0 || venue.tables.length === 0}
               >
                 <Wand2 size={14} />
-                <span className="ml-1">Auto-fill</span>
+                <span className="ml-1 hidden sm:inline">Auto-fill</span>
               </Button>
             </Tooltip>
             {seatedCount > 0 && (
@@ -459,7 +584,7 @@ export function SeatingStep() {
                   onClick={handleClearAll}
                 >
                   <Eraser size={14} />
-                  <span className="ml-1">Clear</span>
+                  <span className="ml-1 hidden sm:inline">Clear</span>
                 </Button>
               </Tooltip>
             )}
@@ -609,6 +734,16 @@ export function SeatingStep() {
           </div>
         )}
       </div>
+
+      {/* Touch drag ghost */}
+      {touchDragGuest && (
+        <div
+          className="fixed pointer-events-none z-50 bg-blue-100 border border-blue-300 rounded px-2 py-1 text-sm shadow-lg"
+          style={{ left: touchDragGuest.x - 40, top: touchDragGuest.y - 20 }}
+        >
+          {guests.find((g) => g.id === touchDragGuest.guestId)?.name || 'Guest'}
+        </div>
+      )}
     </TooltipProvider>
   );
 }

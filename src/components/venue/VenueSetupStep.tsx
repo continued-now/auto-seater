@@ -27,6 +27,7 @@ import {
   DoorOpen,
   DoorClosed,
   Columns3,
+  Menu,
   Mic2,
   MousePointer2,
   Pen,
@@ -137,6 +138,7 @@ export function VenueSetupStep() {
   const selectedWall = selectedElementType === 'wall' ? venue.walls.find((w) => w.id === selectedElementId) ?? null : null;
   const selectedRoom = selectedElementType === 'room' ? (venue.rooms ?? []).find((r) => r.id === selectedElementId) ?? null : null;
 
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [templateName, setTemplateName] = useState('');
@@ -347,9 +349,32 @@ export function VenueSetupStep() {
 
   return (
     <TooltipProvider>
-      <div className="flex h-full bg-slate-50">
+      <div className="flex h-full bg-slate-50 relative">
+        {/* Left sidebar backdrop (mobile only) */}
+        {sidebarOpen && (
+          <div
+            className="fixed inset-0 bg-black/20 z-30 lg:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
+
         {/* Left sidebar */}
-        <div className="w-64 border-r border-border bg-white flex flex-col overflow-y-auto shrink-0">
+        <div
+          className={`fixed inset-y-0 left-0 z-40 w-64 border-r border-border bg-white flex flex-col overflow-y-auto transform transition-transform duration-200 ${
+            sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+          } lg:relative lg:translate-x-0 lg:shrink-0`}
+        >
+          {/* Close button (mobile only) */}
+          <div className="lg:hidden flex items-center justify-between px-3 py-2 border-b border-border">
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Venue Setup</span>
+            <button
+              onClick={() => setSidebarOpen(false)}
+              className="p-1 rounded-md hover:bg-slate-100 text-slate-500 cursor-pointer"
+            >
+              <X size={16} />
+            </button>
+          </div>
+
           {/* Room dimensions */}
           <SidebarSection title="Room Dimensions">
             <div className="flex gap-2">
@@ -716,7 +741,18 @@ export function VenueSetupStep() {
         {/* Main canvas area */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Top toolbar */}
-          <div className="h-10 border-b border-border bg-white flex items-center px-3 gap-2 shrink-0">
+          <div className="h-10 border-b border-border bg-white flex items-center px-3 gap-2 shrink-0 overflow-x-auto">
+            {/* Sidebar toggle (mobile only) */}
+            <Tooltip content="Toggle Sidebar">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="lg:hidden shrink-0"
+                onClick={() => setSidebarOpen(true)}
+              >
+                <Menu size={16} />
+              </Button>
+            </Tooltip>
             <Tooltip content="Zoom Out">
               <Button variant="ghost" size="sm" onClick={() => setZoom(zoom / 1.2)}>
                 <Minus size={14} />
@@ -751,7 +787,7 @@ export function VenueSetupStep() {
 
             <div className="w-px h-5 bg-border mx-1" />
 
-            <span className="text-xs text-slate-400">
+            <span className="text-xs text-slate-400 hidden sm:inline">
               {venue.tables.length} table{venue.tables.length !== 1 ? 's' : ''} &middot;{' '}
               {venue.fixtures.length} fixture{venue.fixtures.length !== 1 ? 's' : ''}
               {venue.walls.length > 0 && (
@@ -759,7 +795,7 @@ export function VenueSetupStep() {
               )}
             </span>
 
-            <span className="text-xs text-slate-400 ml-auto">
+            <span className="text-xs text-slate-400 ml-auto shrink-0">
               {venue.roomWidth}&times;{venue.roomLength} {venue.unit}
             </span>
           </div>
@@ -772,17 +808,25 @@ export function VenueSetupStep() {
 
         {/* Right sidebar — selected element panel */}
         {selectedTable && (
-          <div className="w-60 border-l border-border bg-white flex flex-col overflow-y-auto shrink-0">
-            <SidebarSection title="Selected Table">
-              <div className="space-y-3">
-                <Input
-                  label="Label"
-                  value={selectedTable.label}
-                  onChange={(e) => updateTable(selectedTable.id, { label: e.target.value })}
-                />
-                <Input
-                  label="Capacity"
-                  type="number"
+          <>
+            <div
+              className="fixed inset-0 bg-black/20 z-30 lg:hidden"
+              onClick={() => clearSelection()}
+            />
+            <div className="fixed inset-x-0 bottom-0 max-h-[60vh] rounded-t-xl z-40 bg-white border-t shadow-lg overflow-y-auto lg:relative lg:w-60 lg:border-l lg:border-t-0 lg:rounded-none lg:max-h-none lg:shadow-none lg:inset-auto lg:shrink-0">
+              <div className="lg:hidden flex justify-center py-2">
+                <div className="w-10 h-1 bg-gray-300 rounded-full" />
+              </div>
+              <SidebarSection title="Selected Table">
+                <div className="space-y-3">
+                  <Input
+                    label="Label"
+                    value={selectedTable.label}
+                    onChange={(e) => updateTable(selectedTable.id, { label: e.target.value })}
+                  />
+                  <Input
+                    label="Capacity"
+                    type="number"
                   min={0}
                   value={selectedTable.capacity}
                   onChange={(e) =>
@@ -919,11 +963,20 @@ export function VenueSetupStep() {
                 </Button>
               </div>
             </SidebarSection>
-          </div>
+            </div>
+          </>
         )}
 
         {selectedFixture && (
-          <div className="w-60 border-l border-border bg-white flex flex-col overflow-y-auto shrink-0">
+          <>
+            <div
+              className="fixed inset-0 bg-black/20 z-30 lg:hidden"
+              onClick={() => clearSelection()}
+            />
+            <div className="fixed inset-x-0 bottom-0 max-h-[60vh] rounded-t-xl z-40 bg-white border-t shadow-lg overflow-y-auto lg:relative lg:w-60 lg:border-l lg:border-t-0 lg:rounded-none lg:max-h-none lg:shadow-none lg:inset-auto lg:shrink-0">
+              <div className="lg:hidden flex justify-center py-2">
+                <div className="w-10 h-1 bg-gray-300 rounded-full" />
+              </div>
             <SidebarSection title="Selected Fixture">
               <div className="space-y-3">
                 <Input
@@ -1052,11 +1105,20 @@ export function VenueSetupStep() {
                 </Button>
               </div>
             </SidebarSection>
-          </div>
+            </div>
+          </>
         )}
 
         {selectedWall && (
-          <div className="w-60 border-l border-border bg-white flex flex-col overflow-y-auto shrink-0">
+          <>
+            <div
+              className="fixed inset-0 bg-black/20 z-30 lg:hidden"
+              onClick={() => clearSelection()}
+            />
+            <div className="fixed inset-x-0 bottom-0 max-h-[60vh] rounded-t-xl z-40 bg-white border-t shadow-lg overflow-y-auto lg:relative lg:w-60 lg:border-l lg:border-t-0 lg:rounded-none lg:max-h-none lg:shadow-none lg:inset-auto lg:shrink-0">
+              <div className="lg:hidden flex justify-center py-2">
+                <div className="w-10 h-1 bg-gray-300 rounded-full" />
+              </div>
             <SidebarSection title="Selected Wall">
               <div className="space-y-3">
                 <Input
@@ -1111,12 +1173,21 @@ export function VenueSetupStep() {
                 </Button>
               </div>
             </SidebarSection>
-          </div>
+            </div>
+          </>
         )}
 
         {/* Room properties panel */}
         {selectedRoom && (
-          <div className="w-60 border-l border-border bg-white flex flex-col overflow-y-auto shrink-0">
+          <>
+            <div
+              className="fixed inset-0 bg-black/20 z-30 lg:hidden"
+              onClick={() => clearSelection()}
+            />
+            <div className="fixed inset-x-0 bottom-0 max-h-[60vh] rounded-t-xl z-40 bg-white border-t shadow-lg overflow-y-auto lg:relative lg:w-60 lg:border-l lg:border-t-0 lg:rounded-none lg:max-h-none lg:shadow-none lg:inset-auto lg:shrink-0">
+              <div className="lg:hidden flex justify-center py-2">
+                <div className="w-10 h-1 bg-gray-300 rounded-full" />
+              </div>
             <SidebarSection title="Selected Room">
               <div className="space-y-3">
                 <Input
@@ -1172,7 +1243,8 @@ export function VenueSetupStep() {
                 </Button>
               </div>
             </SidebarSection>
-          </div>
+            </div>
+          </>
         )}
 
         {/* Add Room dialog */}
