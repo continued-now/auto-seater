@@ -1,15 +1,16 @@
 'use client';
 
 import { Button } from '@/components/ui/Button';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, QrCode } from 'lucide-react';
 import type { CheckInStats } from '@/lib/check-in-utils';
 
 interface CheckInHeaderProps {
   stats: CheckInStats;
   onExit: () => void;
+  onExportQRBadges?: () => void;
 }
 
-export function CheckInHeader({ stats, onExit }: CheckInHeaderProps) {
+export function CheckInHeader({ stats, onExit, onExportQRBadges }: CheckInHeaderProps) {
   return (
     <div className="bg-white border-b border-slate-200 px-4 py-3">
       <div className="max-w-2xl mx-auto flex items-center gap-4">
@@ -43,7 +44,18 @@ export function CheckInHeader({ stats, onExit }: CheckInHeaderProps) {
           </div>
         </div>
 
-        <div className="flex-shrink-0 text-right">
+        <div className="flex-shrink-0 flex items-center gap-2">
+          {onExportQRBadges && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onExportQRBadges}
+              className="text-slate-500 hover:text-slate-700"
+            >
+              <QrCode size={16} />
+              <span className="ml-1 hidden sm:inline">QR Badges</span>
+            </Button>
+          )}
           <div className="text-xs text-slate-400">
             {stats.pending} pending
           </div>

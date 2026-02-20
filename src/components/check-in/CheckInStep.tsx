@@ -2,12 +2,15 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import Fuse from 'fuse.js';
+import { ScanLine } from 'lucide-react';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { CheckInHeader } from './CheckInHeader';
 import { CheckInSearch } from './CheckInSearch';
 import { CheckInGuestCard } from './CheckInGuestCard';
 import { CheckInHouseholdGroup } from './CheckInHouseholdGroup';
 import { CheckInEmptyState } from './CheckInEmptyState';
+import { QRScannerView } from './QRScannerView';
+import { QRBadgeExport } from './QRBadgeExport';
 import {
   computeCheckInStats,
   getExpectedGuests,
@@ -24,6 +27,8 @@ export function CheckInStep() {
   const setCurrentStep = useSeatingStore((s) => s.setCurrentStep);
 
   const [filterTab, setFilterTab] = useState<CheckInFilter>('expected');
+  const [scannerMode, setScannerMode] = useState(false);
+  const [badgeExportOpen, setBadgeExportOpen] = useState(false);
 
   const expectedGuests = useMemo(() => getExpectedGuests(guests), [guests]);
   const stats = useMemo(() => computeCheckInStats(guests), [guests]);
@@ -94,28 +99,50 @@ export function CheckInStep() {
     { key: 'all', label: 'All', count: stats.total },
   ];
 
+  if (scannerMode) {
+    return (
+      <>
+        <QRScannerView onClose={() => setScannerMode(false)} />
+        <QRBadgeExport open={badgeExportOpen} onOpenChange={setBadgeExportOpen} />
+      </>
+    );
+  }
+
   if (expectedGuests.length === 0) {
     return (
       <div className="h-dvh flex flex-col bg-slate-50">
-        <CheckInHeader stats={stats} onExit={handleExit} />
+        <CheckInHeader stats={stats} onExit={handleExit} onExportQRBadges={() => setBadgeExportOpen(true)} />
         <div className="flex-1 flex items-center justify-center">
           <CheckInEmptyState type="no-guests" />
         </div>
+        <QRBadgeExport open={badgeExportOpen} onOpenChange={setBadgeExportOpen} />
       </div>
     );
   }
 
   return (
     <div className="h-dvh flex flex-col bg-slate-50">
-      <CheckInHeader stats={stats} onExit={handleExit} />
+      <CheckInHeader stats={stats} onExit={handleExit} onExportQRBadges={() => setBadgeExportOpen(true)} />
 
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto px-4 py-4 space-y-4">
-          {/* Search */}
-          <CheckInSearch
-            value={checkInSearchQuery}
-            onChange={setCheckInSearchQuery}
-          />
+          {/* Search + Scan */}
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <CheckInSearch
+                value={checkInSearchQuery}
+                onChange={setCheckInSearchQuery}
+              />
+            </div>
+            <button
+              onClick={() => setScannerMode(true)}
+              className="flex-shrink-0 h-14 px-4 rounded-xl border border-slate-200 bg-white shadow-sm hover:bg-slate-50 text-slate-600 hover:text-cyan-600 transition-colors flex items-center gap-2 cursor-pointer"
+              title="Scan QR Code"
+            >
+              <ScanLine size={20} />
+              <span className="text-sm font-medium hidden sm:inline">Scan</span>
+            </button>
+          </div>
 
           {/* Filter tabs */}
           <div className="flex gap-1 bg-white rounded-lg p-1 shadow-sm border border-slate-200">
@@ -169,6 +196,7 @@ export function CheckInStep() {
           )}
         </div>
       </div>
+      <QRBadgeExport open={badgeExportOpen} onOpenChange={setBadgeExportOpen} />
     </div>
   );
 }

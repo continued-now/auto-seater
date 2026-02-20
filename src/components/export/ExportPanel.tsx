@@ -6,7 +6,8 @@ import { useSeatingStore } from '@/stores/useSeatingStore';
 import { Button } from '@/components/ui/Button';
 import { Dialog, DialogContent } from '@/components/ui/Dialog';
 import { Checkbox } from '@/components/ui/Checkbox';
-import { Download, FileText, CreditCard, List, Loader2 } from 'lucide-react';
+import { QRDisplayDialog } from '@/components/export/QRDisplayDialog';
+import { Download, FileText, CreditCard, List, Loader2, QrCode } from 'lucide-react';
 import { exportFloorPlanPDF } from '@/lib/export/pdf-floor-plan';
 import { exportPlaceCardsPDF } from '@/lib/export/pdf-place-cards';
 import { exportEscortCardsPDF } from '@/lib/export/pdf-escort-cards';
@@ -147,6 +148,17 @@ export function ExportPanel({ stageRef }: ExportPanelProps) {
                 <div>
                   <div className="font-medium text-slate-700">Escort Card List</div>
                   <div className="text-xs text-slate-400">Alphabetical guest-to-table</div>
+                </div>
+              </button>
+              <div className="border-t border-slate-100 my-1" />
+              <button
+                className="w-full px-3 py-2 text-left text-sm hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                onClick={() => openDialog('qr-display')}
+              >
+                <QrCode size={14} className="text-slate-500" />
+                <div>
+                  <div className="font-medium text-slate-700">Display QR Code</div>
+                  <div className="text-xs text-slate-400">Scannable floor plan link</div>
                 </div>
               </button>
             </div>
@@ -290,6 +302,12 @@ export function ExportPanel({ stageRef }: ExportPanelProps) {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* QR Display Dialog */}
+      <QRDisplayDialog
+        open={dialogType === 'qr-display'}
+        onOpenChange={(open) => { if (!open) setDialogType(null); }}
+      />
     </>
   );
 }
