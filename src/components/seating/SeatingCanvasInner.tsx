@@ -4,7 +4,7 @@ import { useMemo, useCallback, useState, useRef, useImperativeHandle, forwardRef
 import { Stage, Layer, Rect, Circle, Group, Line, Text } from 'react-konva';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { useCanvasInteraction } from '@/hooks/useCanvasInteraction';
-import { getSeatPositions, SEAT_RENDER_RADIUS } from '@/lib/table-geometry';
+import { getSeatPositions, getSuggestedCapacity, SEAT_RENDER_RADIUS } from '@/lib/table-geometry';
 import { validateConstraints } from '@/lib/constraint-validator';
 import type { Table } from '@/types/venue';
 import type { Guest } from '@/types/guest';
@@ -57,6 +57,7 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
   const assignGuestToTable = useSeatingStore((s) => s.assignGuestToTable);
   const swapGuests = useSeatingStore((s) => s.swapGuests);
   const unassignGuest = useSeatingStore((s) => s.unassignGuest);
+  const updateTable = useSeatingStore((s) => s.updateTable);
   const selectedGuestIds = useSeatingStore((s) => s.selectedGuestIds);
   const setSelectedGuestIds = useSeatingStore((s) => s.setSelectedGuestIds);
   const selectedTableId = useSeatingStore((s) => s.selectedTableId);
@@ -75,6 +76,13 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
   const [seatDrag, setSeatDrag] = useState<SeatDragState | null>(null);
   const seatDragRef = useRef<SeatDragState | null>(null);
   const didDragMove = useRef(false);
+
+  // "Add Seats" popover for zero-capacity tables
+  const [addSeatsPopover, setAddSeatsPopover] = useState<{
+    tableId: string;
+    x: number;
+    y: number;
+  } | null>(null);
 
   // Build guest lookup map
   const guestMap = useMemo(() => {
@@ -161,7 +169,7 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
       occupantId: string | null;
     }[] = [];
     for (const table of venue.tables) {
-      const seats = getSeatPositions(table.shape, table.capacity, table.width, table.height);
+      const seats = getSeatPositions(table.shape, table.capacity, table.width, table.height, table.seatingSide, table.endSeats);
       const tableOcc = seatOccupants.get(table.id);
       for (let i = 0; i < seats.length; i++) {
         const occupant = tableOcc?.get(i);
@@ -225,8 +233,8 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
       const tableB = venue.tables.find((t) => t.id === guestB.tableId);
       if (!tableA || !tableB) continue;
 
-      const seatsA = getSeatPositions(tableA.shape, tableA.capacity, tableA.width, tableA.height);
-      const seatsB = getSeatPositions(tableB.shape, tableB.capacity, tableB.width, tableB.height);
+      const seatsA = getSeatPositions(tableA.shape, tableA.capacity, tableA.width, tableA.height, tableA.seatingSide, tableA.endSeats);
+      const seatsB = getSeatPositions(tableB.shape, tableB.capacity, tableB.width, tableB.height, tableB.seatingSide, tableB.endSeats);
 
       const seatA = seatsA[guestA.seatIndex];
       const seatB = seatsB[guestB.seatIndex];
@@ -366,6 +374,7 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
         const name = target.name();
         if (name === 'room-bg' || name === 'stage-bg') {
           setSelectedTableId(null);
+          setAddSeatsPopover(null);
         }
       }
     },
@@ -374,12 +383,13 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
 
   const renderTable = useCallback(
     (table: Table) => {
-      const seats = getSeatPositions(table.shape, table.capacity, table.width, table.height);
+      const seats = getSeatPositions(table.shape, table.capacity, table.width, table.height, table.seatingSide, table.endSeats);
       const tableOccupants = seatOccupants.get(table.id);
       const isFull = (tableOccupants?.size ?? 0) >= table.capacity;
       const hasViolation = violatedTableIds.has(table.id);
       const isSelected = selectedTableId === table.id;
       const isDraggingFromList = !!draggedGuestId;
+      const hasNoSeats = table.capacity === 0;
 
       return (
         <Group
@@ -387,7 +397,18 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
           x={table.position.x}
           y={table.position.y}
           rotation={table.rotation}
-          onClick={() => setSelectedTableId(table.id)}
+          onClick={() => {
+            setSelectedTableId(table.id);
+            if (hasNoSeats) {
+              setAddSeatsPopover({
+                tableId: table.id,
+                x: table.position.x,
+                y: table.position.y,
+              });
+            } else {
+              setAddSeatsPopover(null);
+            }
+          }}
         >
           {/* Table shape */}
           {table.shape === 'round' || table.shape === 'cocktail' ? (
@@ -414,13 +435,27 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
           <Text
             text={table.label}
             x={-table.width / 2}
-            y={-6}
+            y={hasNoSeats ? -14 : -6}
             width={table.width}
             align="center"
             fontSize={11}
             fontStyle="600"
             fill="#475569"
           />
+
+          {/* "Click to add seats" prompt for zero-capacity tables */}
+          {hasNoSeats && (
+            <Text
+              text="Click to add seats"
+              x={-table.width / 2}
+              y={4}
+              width={table.width}
+              align="center"
+              fontSize={9}
+              fill="#94a3b8"
+              listening={false}
+            />
+          )}
 
           {/* Seats */}
           {seats.map((seat, idx) => {
@@ -562,6 +597,7 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
       handleSeatDragStart,
       seatDrag,
       dragTargetSeat,
+      updateTable,
     ]
   );
 
@@ -745,6 +781,152 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
             </Group>
           </Layer>
         )}
+
+        {/* Add Seats popover for zero-capacity tables */}
+        {addSeatsPopover && !seatDrag && (() => {
+          const table = venue.tables.find((t) => t.id === addSeatsPopover.tableId);
+          if (!table || table.capacity > 0) return null;
+          const suggested = getSuggestedCapacity(table.shape, table.width, table.height);
+          const isRect = table.shape === 'rectangular' || table.shape === 'square';
+          const popoverW = isRect ? 170 : 120;
+          const popoverH = isRect ? 108 : 56;
+
+          return (
+            <Layer>
+              <Group x={addSeatsPopover.x + table.width / 2 + 12} y={addSeatsPopover.y - popoverH / 2}>
+                {/* Background */}
+                <Rect
+                  width={popoverW}
+                  height={popoverH}
+                  cornerRadius={8}
+                  fill="white"
+                  stroke="#e2e8f0"
+                  strokeWidth={1}
+                  shadowColor="rgba(0,0,0,0.12)"
+                  shadowBlur={10}
+                  shadowOffsetY={2}
+                />
+
+                {/* "Add Seats" button — applies suggested capacity */}
+                <Group
+                  onClick={() => {
+                    updateTable(table.id, { capacity: suggested });
+                    setAddSeatsPopover(null);
+                  }}
+                  onMouseEnter={(e) => {
+                    const c = e.target.getStage()?.container();
+                    if (c) c.style.cursor = 'pointer';
+                  }}
+                  onMouseLeave={(e) => {
+                    const c = e.target.getStage()?.container();
+                    if (c) c.style.cursor = 'default';
+                  }}
+                >
+                  <Rect
+                    x={8}
+                    y={8}
+                    width={popoverW - 16}
+                    height={26}
+                    cornerRadius={6}
+                    fill="#1e293b"
+                  />
+                  <Text
+                    text={`Add ${suggested} Seats`}
+                    x={8}
+                    y={14}
+                    width={popoverW - 16}
+                    align="center"
+                    fontSize={11}
+                    fontStyle="600"
+                    fill="white"
+                    listening={false}
+                  />
+                </Group>
+
+                {/* Rectangular/square-specific options: one side, no ends */}
+                {isRect && (
+                  <>
+                    {/* One side only option */}
+                    <Group
+                      onClick={() => {
+                        const oneSideCap = getSuggestedCapacity(table.shape, table.width, table.height, 'top-only');
+                        updateTable(table.id, { capacity: oneSideCap, seatingSide: 'top-only', endSeats: true });
+                        setAddSeatsPopover(null);
+                      }}
+                      onMouseEnter={(e) => {
+                        const c = e.target.getStage()?.container();
+                        if (c) c.style.cursor = 'pointer';
+                      }}
+                      onMouseLeave={(e) => {
+                        const c = e.target.getStage()?.container();
+                        if (c) c.style.cursor = 'default';
+                      }}
+                    >
+                      <Rect
+                        x={8}
+                        y={42}
+                        width={popoverW - 16}
+                        height={24}
+                        cornerRadius={5}
+                        fill="#f8fafc"
+                        stroke="#e2e8f0"
+                        strokeWidth={1}
+                      />
+                      <Text
+                        text="One side only"
+                        x={8}
+                        y={48}
+                        width={popoverW - 16}
+                        align="center"
+                        fontSize={10}
+                        fill="#475569"
+                        listening={false}
+                      />
+                    </Group>
+
+                    {/* No end seats option */}
+                    <Group
+                      onClick={() => {
+                        const noEndCap = getSuggestedCapacity(table.shape, table.width, table.height, 'both', false);
+                        updateTable(table.id, { capacity: noEndCap, seatingSide: 'both', endSeats: false });
+                        setAddSeatsPopover(null);
+                      }}
+                      onMouseEnter={(e) => {
+                        const c = e.target.getStage()?.container();
+                        if (c) c.style.cursor = 'pointer';
+                      }}
+                      onMouseLeave={(e) => {
+                        const c = e.target.getStage()?.container();
+                        if (c) c.style.cursor = 'default';
+                      }}
+                    >
+                      <Rect
+                        x={8}
+                        y={74}
+                        width={popoverW - 16}
+                        height={24}
+                        cornerRadius={5}
+                        fill="#f8fafc"
+                        stroke="#e2e8f0"
+                        strokeWidth={1}
+                      />
+                      <Text
+                        text="No end seats"
+                        x={8}
+                        y={80}
+                        width={popoverW - 16}
+                        align="center"
+                        fontSize={10}
+                        fill="#475569"
+                        listening={false}
+                      />
+                    </Group>
+                  </>
+                )}
+              </Group>
+            </Layer>
+          );
+        })()}
       </Stage>
     </div>
   );

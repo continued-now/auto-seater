@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useRef } from 'react';
-import { Camera, X, Plus } from 'lucide-react';
-import type { PhotoSlot, PhotoSlotId } from '@/types/photo-to-room';
+import { useCallback, useRef, useState } from 'react';
+import { Camera, X, Plus, Upload, AlertCircle } from 'lucide-react';
+import type { PhotoSlot, PhotoSlotId, CapturedPhoto, LensType } from '@/types/photo-to-room';
+import { hasValidCameraMetadata } from '@/lib/exif-parser';
 
 interface PhotoUploadGridProps {
   photos: PhotoSlot[];
@@ -29,26 +30,45 @@ function PhotoSlotCard({
   onRemove: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const handleDrop = useCallback(
-    (e: React.DragEvent) => {
+    async (e: React.DragEvent) => {
       e.preventDefault();
       const file = e.dataTransfer.files[0];
-      if (file) onAdd(file);
+      if (file) {
+        const valid = await hasValidCameraMetadata(file);
+        if (!valid) {
+          setUploadError('No camera data. Use camera instead.');
+          return;
+        }
+        setUploadError(null);
+        onAdd(file);
+      }
     },
     [onAdd]
   );
 
   const handleChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
-      if (file) onAdd(file);
+      if (file) {
+        const valid = await hasValidCameraMetadata(file);
+        if (!valid) {
+          setUploadError('No camera data. Use camera instead.');
+          e.target.value = '';
+          return;
+        }
+        setUploadError(null);
+        onAdd(file);
+      }
       e.target.value = '';
     },
     [onAdd]
   );
 
   if (slot.preview) {
+    const lensType = slot.exif?.lensType ?? slot.capturedPhoto?.lensType;
     return (
       <div className="relative group">
         <img
@@ -65,6 +85,11 @@ function PhotoSlotCard({
         <span className="absolute bottom-1 left-1 text-[10px] font-medium bg-slate-800/70 text-white px-1.5 py-0.5 rounded">
           {CORNER_LABELS[slot.id]}
         </span>
+        {lensType && (
+          <span className="absolute top-1 left-1 text-[9px] font-bold bg-slate-800/70 text-white px-1 py-0.5 rounded">
+            {lensType === 'ultrawide' ? 'UW' : 'W'}
+          </span>
+        )}
       </div>
     );
   }
@@ -80,6 +105,12 @@ function PhotoSlotCard({
         <Plus size={16} className="text-slate-400" />
         <span className="text-[10px] text-slate-500 font-medium">{CORNER_LABELS[slot.id]}</span>
       </button>
+      {uploadError && (
+        <div className="flex items-center gap-1 mt-1">
+          <AlertCircle size={10} className="text-red-500 shrink-0" />
+          <p className="text-[10px] text-red-500">{uploadError}</p>
+        </div>
+      )}
       <input
         ref={inputRef}
         type="file"
@@ -134,8 +165,47 @@ export default function PhotoUploadGrid({ photos, onAddPhoto, onRemovePhoto }: P
       </div>
 
       <p className="text-xs text-slate-400 text-center">
-        Upload 1-6 photos. 4 corner photos give the best results.
+        Upload 1-6 photos with camera metadata. Screenshots without EXIF will be rejected.
       </p>
+    </div>
+  );
+}
+
+/** Compact room photo grid used in the camera-capture flow */
+interface RoomPhotoGridProps {
+  photos: CapturedPhoto[];
+  onRemove: (index: number) => void;
+  maxPhotos?: number;
+}
+
+export function RoomPhotoGrid({ photos, onRemove, maxPhotos = 4 }: RoomPhotoGridProps) {
+  return (
+    <div className="flex gap-2 flex-wrap">
+      {photos.map((photo, idx) => (
+        <div key={idx} className="relative group w-16 h-12 shrink-0">
+          <img
+            src={photo.preview}
+            alt={`Room photo ${idx + 1}`}
+            className="w-full h-full object-cover rounded-md border border-slate-200"
+          />
+          <button
+            onClick={() => onRemove(idx)}
+            className="absolute -top-1 -right-1 p-0.5 rounded-full bg-slate-800/70 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+          >
+            <X size={10} />
+          </button>
+          {photo.lensType && (
+            <span className="absolute bottom-0.5 left-0.5 text-[8px] font-bold bg-slate-800/70 text-white px-0.5 rounded">
+              {photo.lensType === 'ultrawide' ? 'UW' : 'W'}
+            </span>
+          )}
+        </div>
+      ))}
+      {photos.length < maxPhotos && (
+        <div className="w-16 h-12 flex items-center justify-center rounded-md border-2 border-dashed border-slate-300 text-slate-400">
+          <Plus size={14} />
+        </div>
+      )}
     </div>
   );
 }

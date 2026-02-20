@@ -1,8 +1,35 @@
 import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
-import { buildPhotoToRoomPrompt } from '@/lib/ai-prompt-builder';
+import { buildPhotoToRoomPrompt, buildCapturePrompt } from '@/lib/ai-prompt-builder';
 import { parseAIRoomResponse } from '@/lib/ai-room-parser';
-import type { ExifData, MeasurementInput } from '@/types/photo-to-room';
+import type { ExifData, MeasurementInput, CaptureMode, CapturedPhoto, ReferenceDimension } from '@/types/photo-to-room';
+
+interface LegacyMetadata {
+  cornerLabels: string[];
+  measurements: MeasurementInput;
+  exifData: (ExifData | null)[];
+}
+
+interface CaptureMetadata {
+  captureMode: CaptureMode;
+  referenceDimension: ReferenceDimension | null;
+  roomPhotos: Array<{
+    lensType: string | null;
+    focalLength35mm: number | null;
+    resolution: { width: number; height: number };
+    source: string;
+  }>;
+  referencePhoto: {
+    lensType: string | null;
+    focalLength35mm: number | null;
+    resolution: { width: number; height: number };
+  } | null;
+  unit: string;
+}
+
+function isCaptureMetadata(meta: unknown): meta is CaptureMetadata {
+  return typeof meta === 'object' && meta !== null && 'captureMode' in meta;
+}
 
 export async function POST(request: Request) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -25,12 +52,16 @@ export async function POST(request: Request) {
     }
   }
 
+  // Extract reference photo (camera capture flow)
+  const referencePhotoFile = formData.get('referencePhoto');
+  const hasReferencePhoto = referencePhotoFile instanceof File;
+
   if (photos.length === 0 || photos.length > 6) {
     return NextResponse.json({ error: 'Please provide 1-6 photos' }, { status: 400 });
   }
 
   // Extract metadata
-  let metadata: { cornerLabels: string[]; measurements: MeasurementInput; exifData: (ExifData | null)[] };
+  let metadata: LegacyMetadata | CaptureMetadata;
   try {
     const metadataRaw = formData.get('metadata');
     if (typeof metadataRaw !== 'string') {
@@ -43,26 +74,72 @@ export async function POST(request: Request) {
 
   // Convert photos to base64
   const imageBlocks: Anthropic.ImageBlockParam[] = [];
+
+  // If reference mode, add reference photo first
+  if (hasReferencePhoto) {
+    const buffer = await (referencePhotoFile as File).arrayBuffer();
+    const base64 = Buffer.from(buffer).toString('base64');
+    imageBlocks.push({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/jpeg', data: base64 },
+    });
+  }
+
   for (const photo of photos) {
     const buffer = await photo.arrayBuffer();
     const base64 = Buffer.from(buffer).toString('base64');
     imageBlocks.push({
       type: 'image',
-      source: {
-        type: 'base64',
-        media_type: 'image/jpeg',
-        data: base64,
-      },
+      source: { type: 'base64', media_type: 'image/jpeg', data: base64 },
     });
   }
 
-  // Build prompt
-  const { system, user } = buildPhotoToRoomPrompt({
-    photoCount: photos.length,
-    cornerLabels: metadata.cornerLabels,
-    measurements: metadata.measurements,
-    exifData: metadata.exifData,
-  });
+  // Build prompt based on metadata type
+  let system: string;
+  let user: string;
+
+  if (isCaptureMetadata(metadata)) {
+    // New camera-capture flow
+    const roomPhotos: CapturedPhoto[] = metadata.roomPhotos.map((p) => ({
+      blob: new Blob(), // not needed for prompt building
+      preview: '',
+      source: p.source as 'camera' | 'upload',
+      lensType: p.lensType as 'ultrawide' | 'regular' | null,
+      focalLength35mm: p.focalLength35mm,
+      resolution: p.resolution,
+    }));
+
+    const referencePhoto: CapturedPhoto | null = metadata.referencePhoto
+      ? {
+          blob: new Blob(),
+          preview: '',
+          source: 'camera',
+          lensType: metadata.referencePhoto.lensType as 'ultrawide' | 'regular' | null,
+          focalLength35mm: metadata.referencePhoto.focalLength35mm,
+          resolution: metadata.referencePhoto.resolution,
+        }
+      : null;
+
+    const result = buildCapturePrompt({
+      captureMode: metadata.captureMode,
+      roomPhotos,
+      referencePhoto,
+      referenceDimension: metadata.referenceDimension,
+      unit: metadata.unit,
+    });
+    system = result.system;
+    user = result.user;
+  } else {
+    // Legacy upload flow
+    const result = buildPhotoToRoomPrompt({
+      photoCount: photos.length,
+      cornerLabels: metadata.cornerLabels,
+      measurements: metadata.measurements,
+      exifData: metadata.exifData,
+    });
+    system = result.system;
+    user = result.user;
+  }
 
   const client = new Anthropic({ apiKey });
 

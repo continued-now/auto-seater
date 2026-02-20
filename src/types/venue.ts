@@ -1,5 +1,7 @@
 export type TableShape = 'round' | 'rectangular' | 'square' | 'head' | 'sweetheart' | 'cocktail';
 
+export type SeatingSide = 'both' | 'top-only' | 'bottom-only';
+
 export type FixtureType =
   | 'stage'
   | 'dance-floor'
@@ -58,6 +60,8 @@ export interface Table {
   height: number;
   assignedGuestIds: string[];
   roomId?: string;
+  seatingSide?: SeatingSide;  // default: 'both' — rectangular/square only
+  endSeats?: boolean;          // default: true — whether short ends have seats
 }
 
 export interface Fixture {

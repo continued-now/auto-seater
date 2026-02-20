@@ -789,6 +789,41 @@ export function VenueSetupStep() {
                     updateTable(selectedTable.id, { capacity: Math.max(0, Number(e.target.value) || 0) })
                   }
                 />
+                {/* Seating side — rectangular/square only */}
+                {(selectedTable.shape === 'rectangular' || selectedTable.shape === 'square') && selectedTable.capacity > 0 && (
+                  <div>
+                    <label className="text-xs text-slate-500 block mb-1">Seating sides</label>
+                    <div className="grid grid-cols-3 gap-1">
+                      {([
+                        { value: 'both', label: 'Both' },
+                        { value: 'top-only', label: 'Top' },
+                        { value: 'bottom-only', label: 'Bottom' },
+                      ] as const).map(({ value, label }) => (
+                        <Button
+                          key={value}
+                          variant={(selectedTable.seatingSide ?? 'both') === value ? 'primary' : 'secondary'}
+                          size="sm"
+                          onClick={() => updateTable(selectedTable.id, { seatingSide: value })}
+                          className="text-[10px]"
+                        >
+                          {label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {/* End seats toggle — rectangular/square with both sides */}
+                {(selectedTable.shape === 'rectangular' || selectedTable.shape === 'square') &&
+                  selectedTable.capacity > 0 &&
+                  (selectedTable.seatingSide ?? 'both') === 'both' && (
+                  <label className="flex items-center gap-2 text-xs cursor-pointer">
+                    <Checkbox
+                      checked={selectedTable.endSeats !== false}
+                      onCheckedChange={(checked) => updateTable(selectedTable.id, { endSeats: checked })}
+                    />
+                    Include end seats
+                  </label>
+                )}
                 <div className="flex items-center gap-2">
                   <Input
                     label="Rotation"

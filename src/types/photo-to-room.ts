@@ -1,19 +1,36 @@
 import type { TableShape, FixtureType, WallStyle, LengthUnit } from '@/types/venue';
+import type { LensType } from '@/lib/lens-database';
+
+export type { LensType } from '@/lib/lens-database';
 
 export type PhotoSlotId = 'corner-1' | 'corner-2' | 'corner-3' | 'corner-4' | 'detail-1' | 'detail-2';
+
+export type CaptureSource = 'camera' | 'upload';
+
+export interface CapturedPhoto {
+  blob: Blob;
+  preview: string;           // object URL
+  source: CaptureSource;
+  lensType: LensType | null; // null if uploaded without EXIF lens data
+  focalLength35mm: number | null;
+  resolution: { width: number; height: number };
+}
 
 export interface PhotoSlot {
   id: PhotoSlotId;
   file: File | null;
   preview: string | null;
   exif: ExifData | null;
+  capturedPhoto: CapturedPhoto | null;
 }
 
 export interface ExifData {
   focalLength: number | null;
+  focalLength35mm: number | null;
   cameraModel: string | null;
   imageWidth: number | null;
   imageHeight: number | null;
+  lensType: LensType | null;
 }
 
 export type ReferenceObjectType = 'standard-door' | 'folding-chair' | 'round-table-8' | 'window-36in' | 'single-bed';
@@ -37,6 +54,14 @@ export interface MeasurementInput {
   roomLength: number | null;
   unit: LengthUnit;
   referenceObject: ReferenceObjectType | null;
+}
+
+export type CaptureMode = 'reference' | 'no-reference';
+
+export interface ReferenceDimension {
+  type: ReferenceObjectType | 'custom';
+  value: number;
+  unit: LengthUnit;
 }
 
 export interface DetectedObject {
@@ -63,6 +88,18 @@ export interface DetectedRoom {
   unit: LengthUnit;
   objects: DetectedObject[];
   walls: DetectedWall[];
+  accuracyEstimate?: string;
 }
 
-export type PhotoToRoomStep = 'idle' | 'upload' | 'measurements' | 'processing' | 'preview' | 'error' | 'done';
+export type PhotoToRoomStep =
+  | 'idle'
+  | 'mode-select'
+  | 'reference-capture'
+  | 'reference-measure'
+  | 'room-capture'
+  | 'upload'
+  | 'measurements'
+  | 'processing'
+  | 'preview'
+  | 'error'
+  | 'done';

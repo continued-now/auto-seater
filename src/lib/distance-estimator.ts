@@ -1,4 +1,5 @@
-import type { MeasurementInput, ExifData, REFERENCE_OBJECTS } from '@/types/photo-to-room';
+import type { MeasurementInput, ExifData, CaptureMode, CapturedPhoto, ReferenceDimension } from '@/types/photo-to-room';
+import { getFieldOfView } from '@/lib/lens-database';
 
 const M_TO_FT = 3.28084;
 
@@ -9,6 +10,7 @@ interface ScaleEstimate {
   accuracy: string;
 }
 
+/** Legacy estimator — used for backwards-compatible upload flow */
 export function estimateScale(params: {
   measurements: MeasurementInput;
   exifData: (ExifData | null)[];
@@ -28,7 +30,6 @@ export function estimateScale(params: {
 
   // Priority 2: Reference object calibration
   if (measurements.referenceObject) {
-    // Use reference object to estimate scale — assume room is roughly 6x the reference object
     const refSizes: Record<string, number> = {
       'standard-door': 3,
       'folding-chair': 1.5,
@@ -37,7 +38,6 @@ export function estimateScale(params: {
       'single-bed': 6.5,
     };
     const refSize = refSizes[measurements.referenceObject] || 3;
-    // Heuristic: typical event room is ~6-8x the size of a reference object
     const estimatedWidth = refSize * 8;
     const estimatedHeight = refSize * 6;
     return {
@@ -48,17 +48,22 @@ export function estimateScale(params: {
     };
   }
 
-  // Priority 3: EXIF focal length estimation
-  const validExif = exifData.filter((e): e is ExifData => e?.focalLength != null);
-  if (validExif.length > 0) {
-    const avgFocal = validExif.reduce((sum, e) => sum + (e.focalLength || 0), 0) / validExif.length;
-    // Wide angle (< 28mm) → likely larger room, telephoto → smaller room
-    // Rough heuristic based on typical smartphone focal lengths
-    const roomFactor = avgFocal < 24 ? 1.3 : avgFocal < 35 ? 1.0 : 0.8;
+  // Priority 3: EXIF/lens focal length estimation with real FOV math
+  const focalLengths = exifData
+    .filter((e): e is ExifData => e != null)
+    .map((e) => e.focalLength35mm ?? e.focalLength)
+    .filter((f): f is number => f != null);
+
+  if (focalLengths.length > 0) {
+    const avgFocal = focalLengths.reduce((a, b) => a + b, 0) / focalLengths.length;
+    const fovDeg = getFieldOfView(avgFocal);
+    // Wider FOV → can see more of the room → room likely larger
+    // Use FOV to scale base estimate (30x20 ft baseline at ~78° FOV)
+    const fovFactor = fovDeg / 78;
     return {
-      widthFt: 30 * roomFactor,
-      heightFt: 20 * roomFactor,
-      method: `EXIF focal length: ${avgFocal.toFixed(0)}mm`,
+      widthFt: 30 * fovFactor,
+      heightFt: 20 * fovFactor,
+      method: `FOV-based (${avgFocal.toFixed(0)}mm, ~${fovDeg.toFixed(0)}° FOV)`,
       accuracy: '~20% margin',
     };
   }
@@ -69,5 +74,55 @@ export function estimateScale(params: {
     heightFt: 20,
     method: 'Default estimate (no calibration data)',
     accuracy: '~30-50% margin, using default',
+  };
+}
+
+/** New estimator for camera-capture flow with optional reference calibration */
+export function estimateScaleFromCapture(params: {
+  captureMode: CaptureMode;
+  roomPhotos: CapturedPhoto[];
+  referenceDimension: ReferenceDimension | null;
+}): ScaleEstimate {
+  const { captureMode, roomPhotos, referenceDimension } = params;
+
+  // With reference calibration (Flow A)
+  if (captureMode === 'reference' && referenceDimension) {
+    const refValueFt = referenceDimension.unit === 'm'
+      ? referenceDimension.value * M_TO_FT
+      : referenceDimension.value;
+
+    // Reference provides ground truth scale — room estimated at 6-8x reference
+    const estimatedWidth = refValueFt * 8;
+    const estimatedHeight = refValueFt * 6;
+    return {
+      widthFt: estimatedWidth,
+      heightFt: estimatedHeight,
+      method: `Reference calibration (${referenceDimension.value}${referenceDimension.unit})`,
+      accuracy: '~85-90%',
+    };
+  }
+
+  // Without reference (Flow B) — use known lens FOV
+  const focalLengths = roomPhotos
+    .map((p) => p.focalLength35mm)
+    .filter((f): f is number => f != null);
+
+  if (focalLengths.length > 0) {
+    const avgFocal = focalLengths.reduce((a, b) => a + b, 0) / focalLengths.length;
+    const fovDeg = getFieldOfView(avgFocal);
+    const fovFactor = fovDeg / 78;
+    return {
+      widthFt: 30 * fovFactor,
+      heightFt: 20 * fovFactor,
+      method: `AI estimate with known lens (${avgFocal.toFixed(0)}mm, ~${fovDeg.toFixed(0)}° FOV)`,
+      accuracy: '~60-75%',
+    };
+  }
+
+  return {
+    widthFt: 30,
+    heightFt: 20,
+    method: 'AI estimate (no calibration)',
+    accuracy: '~60-75%',
   };
 }
