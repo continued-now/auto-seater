@@ -175,6 +175,7 @@ export interface SeatingState {
   startDemo: () => void;
   exitDemo: () => void;
   advanceDemoStep: () => void;
+  goBackDemoStep: () => void;
 }
 
 export const useSeatingStore = create<SeatingState>()(
@@ -1239,6 +1240,27 @@ export const useSeatingStore = create<SeatingState>()(
               }
             }, 800);
           }
+        },
+
+        goBackDemoStep: () => {
+          const current = get();
+          if (current.demoStep <= 0) return;
+          const prevStep = current.demoStep - 1;
+
+          const stepToAppStep: Record<number, AppStep> = {
+            0: 'guests',
+            1: 'venue',
+            2: 'seating',
+            3: 'check-in',
+          };
+
+          set((state) => {
+            state.demoStep = prevStep;
+            const appStep = stepToAppStep[prevStep];
+            if (appStep) state.currentStep = appStep;
+            state.zoom = 1;
+            state.panOffset = { x: 0, y: 0 };
+          });
         },
       })),
       {

@@ -40,6 +40,7 @@ export function DemoOverlay() {
   const isDemoMode = useSeatingStore((s) => s.isDemoMode);
   const demoStep = useSeatingStore((s) => s.demoStep);
   const advanceDemoStep = useSeatingStore((s) => s.advanceDemoStep);
+  const goBackDemoStep = useSeatingStore((s) => s.goBackDemoStep);
   const exitDemo = useSeatingStore((s) => s.exitDemo);
   const startDemo = useSeatingStore((s) => s.startDemo);
 
@@ -133,6 +134,12 @@ export function DemoOverlay() {
           </button>
 
           <div className="flex items-center gap-2">
+            {demoStep > 0 && (
+              <Button variant="ghost" size="sm" onClick={goBackDemoStep}>
+                <ArrowLeft size={14} />
+                Back
+              </Button>
+            )}
             {isLastStep ? (
               <>
                 <Button
