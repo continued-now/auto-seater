@@ -40,6 +40,38 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
 
   const bp = venue.blueprintMode;
 
+  // Compute glow rect behind selected element
+  const selectionGlow = useMemo(() => {
+    if (!selectedElementId) return null;
+    const table = venue.tables.find((t) => t.id === selectedElementId);
+    if (table) {
+      const pad = 6;
+      return {
+        x: table.position.x - table.width / 2 - pad,
+        y: table.position.y - table.height / 2 - pad,
+        width: table.width + pad * 2,
+        height: table.height + pad * 2,
+        rotation: table.rotation,
+        originX: table.position.x,
+        originY: table.position.y,
+      };
+    }
+    const fixture = venue.fixtures.find((f) => f.id === selectedElementId);
+    if (fixture) {
+      const pad = 6;
+      return {
+        x: fixture.position.x - fixture.width / 2 - pad,
+        y: fixture.position.y - fixture.height / 2 - pad,
+        width: fixture.width + pad * 2,
+        height: fixture.height + pad * 2,
+        rotation: fixture.rotation,
+        originX: fixture.position.x,
+        originY: fixture.position.y,
+      };
+    }
+    return null;
+  }, [selectedElementId, venue.tables, venue.fixtures]);
+
   // Attach Transformer to selected element
   useEffect(() => {
     const tr = transformerRef.current;
@@ -325,16 +357,32 @@ export function VenueCanvasInner({ width, height }: VenueCanvasInnerProps) {
 
       {/* Layer 5: Overlay — Transformer + wall drawing preview */}
       <Layer>
+        {selectionGlow && (
+          <Rect
+            x={selectionGlow.x}
+            y={selectionGlow.y}
+            width={selectionGlow.width}
+            height={selectionGlow.height}
+            fill="rgba(37, 99, 235, 0.08)"
+            stroke="rgba(37, 99, 235, 0.25)"
+            strokeWidth={1}
+            cornerRadius={4}
+            rotation={selectionGlow.rotation}
+            offsetX={selectionGlow.x - selectionGlow.originX}
+            offsetY={selectionGlow.y - selectionGlow.originY}
+            listening={false}
+          />
+        )}
         <Transformer
           ref={transformerRef}
           borderStroke="#2563EB"
           borderStrokeWidth={1.5}
           anchorStroke="#2563EB"
           anchorFill="#ffffff"
-          anchorSize={8}
+          anchorSize={10}
           anchorCornerRadius={2}
           rotateAnchorOffset={20}
-          enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
+          enabledAnchors={['top-left', 'top-center', 'top-right', 'middle-left', 'middle-right', 'bottom-left', 'bottom-center', 'bottom-right']}
           boundBoxFunc={(_oldBox, newBox) => {
             if (newBox.width < 20 || newBox.height < 20) return _oldBox;
             return newBox;

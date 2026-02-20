@@ -24,6 +24,7 @@ import {
   GripVertical,
   UtensilsCrossed,
   X,
+  LayoutGrid,
 } from 'lucide-react';
 
 const SeatingCanvasInner = dynamic(
@@ -49,6 +50,7 @@ export function SeatingStep() {
   const addConstraint = useSeatingStore((s) => s.addConstraint);
   const bulkAssignToTable = useSeatingStore((s) => s.bulkAssignToTable);
   const getViolations = useSeatingStore((s) => s.getViolations);
+  const setCurrentStep = useSeatingStore((s) => s.setCurrentStep);
 
   const [filterTab, setFilterTab] = useState<FilterTab>('all');
   const [showConstraints, setShowConstraints] = useState(true);
@@ -406,17 +408,34 @@ export function SeatingStep() {
           </div>
 
           {/* Canvas Area */}
-          <div
-            ref={canvasWrapperRef}
-            className="flex-1 relative bg-slate-100"
-            onDragOver={handleCanvasDragOver}
-            onDrop={handleCanvasDrop}
-          >
-            <SeatingCanvasInner
-              showConstraints={showConstraints}
-              draggedGuestId={draggedGuestId}
-            />
-          </div>
+          {venue.tables.length === 0 ? (
+            <div className="flex-1 flex items-center justify-center bg-slate-50">
+              <div className="text-center max-w-xs">
+                <div className="mx-auto w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center mb-4">
+                  <LayoutGrid size={24} className="text-slate-400" />
+                </div>
+                <h3 className="text-base font-semibold text-slate-900 mb-1">Set up your venue first</h3>
+                <p className="text-sm text-slate-500 mb-4">
+                  Add tables in the Venue tab before assigning seats.
+                </p>
+                <Button variant="primary" size="sm" onClick={() => setCurrentStep('venue')}>
+                  Go to Venue
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div
+              ref={canvasWrapperRef}
+              className="flex-1 relative bg-slate-100"
+              onDragOver={handleCanvasDragOver}
+              onDrop={handleCanvasDrop}
+            >
+              <SeatingCanvasInner
+                showConstraints={showConstraints}
+                draggedGuestId={draggedGuestId}
+              />
+            </div>
+          )}
         </div>
 
         {/* Bottom Action Bar (when guests selected) */}
