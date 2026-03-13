@@ -14,6 +14,7 @@ import type {
 import { extractExif } from '@/lib/exif-parser';
 import { validatePhotoFile, compressPhoto } from '@/lib/photo-processor';
 import { useSeatingStore } from '@/stores/useSeatingStore';
+import { getPurchase } from '@/lib/purchase';
 
 const SLOT_IDS: PhotoSlotId[] = ['corner-1', 'corner-2', 'corner-3', 'corner-4', 'detail-1', 'detail-2'];
 
@@ -206,10 +207,12 @@ export function usePhotoToRoom() {
         formData.append('metadata', JSON.stringify({ cornerLabels, measurements, exifData }));
       }
 
+      const purchase = getPurchase();
       const response = await fetch('/api/photo-to-room', {
         method: 'POST',
         body: formData,
         signal: abort.signal,
+        headers: purchase?.verified && purchase.sessionId ? { 'x-purchase-token': purchase.sessionId } : {},
       });
 
       const data = await response.json();

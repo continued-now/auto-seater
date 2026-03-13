@@ -9,7 +9,8 @@ export async function exportFloorPlanPDF(
   stageNode: Konva.Stage,
   options: FloorPlanExportOptions,
   venue: VenueConfig,
-  guests: Guest[]
+  guests: Guest[],
+  showWatermark: boolean = false
 ): Promise<void> {
   const page = getPageDimensions(options.paperSize, options.orientation);
   const doc = new jsPDF({
@@ -83,6 +84,39 @@ export async function exportFloorPlanPDF(
 
   const imgX = margin + (contentWidth - imgWidth) / 2;
   doc.addImage(dataUrl, 'PNG', imgX, yPos, imgWidth, imgHeight);
+
+  // Watermark for free tier
+  if (showWatermark) {
+    doc.setFontSize(32);
+    doc.setTextColor(200, 200, 200);
+    doc.setFont('helvetica', 'bold');
+
+    // Save graphics state for rotation
+    const centerX = page.width / 2;
+    const centerY = page.height / 2;
+
+    // Draw diagonal watermark text
+    const watermarkText = 'AutoSeater';
+    doc.saveGraphicsState();
+    // Rotate -30 degrees around center
+    const angle = -30 * (Math.PI / 180);
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+
+    // Apply rotation matrix
+    doc.setCurrentTransformationMatrix(
+      doc.Matrix(cos, sin, -sin, cos, centerX - centerX * cos + centerY * sin, centerY - centerX * sin - centerY * cos)
+    );
+
+    doc.text(watermarkText, centerX, centerY, { align: 'center' });
+    doc.restoreGraphicsState();
+
+    // Small footer watermark
+    doc.setFontSize(8);
+    doc.setTextColor(160, 160, 160);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Created with AutoSeater (free) - autoseater.com', page.width / 2, page.height - 8, { align: 'center' });
+  }
 
   const blob = doc.output('blob');
   triggerDownload(blob, `floor-plan-${Date.now()}.pdf`);

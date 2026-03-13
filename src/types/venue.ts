@@ -62,6 +62,7 @@ export interface Table {
   roomId?: string;
   seatingSide?: SeatingSide;  // default: 'both' — rectangular/square only
   endSeats?: boolean;          // default: true — whether short ends have seats
+  note?: string;               // optional caterer/planner note for this table
 }
 
 export interface Fixture {

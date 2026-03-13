@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { serializeLayout } from '@/lib/layout-serializer';
 import { parseLayoutAdvisorResponse } from '@/lib/layout-suggestion-parser';
+import { verifyPurchaseToken } from '@/lib/verify-purchase-server';
 import type { LayoutAdvisorRequest } from '@/types/layout-advisor';
 
 const MODE_PROMPTS = {
@@ -75,6 +76,13 @@ Positions are in the room's unit system. Return ONLY valid JSON, no markdown fen
 };
 
 export async function POST(request: Request) {
+  // Verify Pro purchase before processing AI request
+  const purchaseToken = request.headers.get('x-purchase-token');
+  const verified = await verifyPurchaseToken(purchaseToken);
+  if (!verified) {
+    return NextResponse.json({ error: 'Pro subscription required for AI features' }, { status: 403 });
+  }
+
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return NextResponse.json({ error: 'Server configuration error: missing API key' }, { status: 500 });

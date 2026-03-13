@@ -19,4 +19,9 @@ export interface EscortCardExportOptions {
   columns: 2 | 3;
 }
 
-export type ExportType = 'floor-plan' | 'place-cards' | 'escort-cards' | 'qr-display';
+export interface TableServiceExportOptions {
+  paperSize: PaperSize;
+  title: string;
+}
+
+export type ExportType = 'floor-plan' | 'place-cards' | 'escort-cards' | 'qr-display' | 'assignments' | 'table-service';

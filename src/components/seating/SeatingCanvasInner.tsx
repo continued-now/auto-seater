@@ -18,6 +18,7 @@ export interface SeatingCanvasInnerHandle {
 interface SeatingCanvasInnerProps {
   showConstraints: boolean;
   draggedGuestId: string | null;
+  heatmapMode?: boolean;
 }
 
 // Colour constants
@@ -28,6 +29,10 @@ const COLOURS = {
   seatDropInvalid: { fill: '#FEE2E2', stroke: '#DC2626' },
   seatDragSource: { fill: '#FEF3C7', stroke: '#D97706' },
   seatSwapTarget: { fill: '#E0E7FF', stroke: '#4F46E5' },
+  tableEmpty: '#f8fafc',       // empty table default
+  tablePartial: '#EFF6FF',     // light blue tint
+  tableAlmostFull: '#FEF9C3',  // light yellow
+  tableFull: '#DCFCE7',        // light green
   tableFill: '#f8fafc',
   tableStroke: '#94a3b8',
   constraintTogether: '#16A34A',
@@ -67,6 +72,7 @@ interface SeatingTableGroupProps {
   onSeatDragStart: (guestId: string, guestName: string, tableId: string, seatIdx: number, e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => void;
   onSeatClick: (guestId: string, stageX: number, stageY: number) => void;
   seatDragRef: React.MutableRefObject<SeatDragState | null>;
+  heatmapMode?: boolean;
 }
 
 function areTablePropsEqual(prev: SeatingTableGroupProps, next: SeatingTableGroupProps): boolean {
@@ -77,6 +83,7 @@ function areTablePropsEqual(prev: SeatingTableGroupProps, next: SeatingTableGrou
   if (prev.isSelected !== next.isSelected) return false;
   if (prev.isDraggingFromList !== next.isDraggingFromList) return false;
   if (prev.selectedGuestIds !== next.selectedGuestIds) return false;
+  if (prev.heatmapMode !== next.heatmapMode) return false;
 
   // seatDrag: only re-render if this table is involved
   const prevDragRelevant =
@@ -93,6 +100,16 @@ function areTablePropsEqual(prev: SeatingTableGroupProps, next: SeatingTableGrou
   return true;
 }
 
+/** Returns { color, opacity } for the heatmap overlay based on fill percentage */
+function getHeatmapStyle(fillPercent: number): { color: string; opacity: number } | null {
+  if (fillPercent <= 0) return null; // 0% — no overlay
+  if (fillPercent <= 25) return { color: '#DBEAFE', opacity: 0.4 };
+  if (fillPercent <= 50) return { color: '#DCFCE7', opacity: 0.5 };
+  if (fillPercent <= 75) return { color: '#FEF3C7', opacity: 0.6 };
+  if (fillPercent < 100) return { color: '#FFEDD5', opacity: 0.7 };
+  return { color: '#DCFCE7', opacity: 0.7 }; // 100%+
+}
+
 const SeatingTableGroup = React.memo(function SeatingTableGroup({
   table,
   tableOccupants,
@@ -107,9 +124,23 @@ const SeatingTableGroup = React.memo(function SeatingTableGroup({
   onSeatDragStart,
   onSeatClick,
   seatDragRef,
+  heatmapMode,
 }: SeatingTableGroupProps) {
   const seats = getSeatPositions(table.shape, table.capacity, table.width, table.height, table.seatingSide, table.endSeats);
   const hasNoSeats = table.capacity === 0;
+
+  const occupiedCount = tableOccupants?.size ?? 0;
+  const occupancyRatio = table.capacity > 0 ? occupiedCount / table.capacity : 0;
+  let tableFillColor: string;
+  if (isFull) {
+    tableFillColor = COLOURS.tableFull;
+  } else if (occupancyRatio >= 0.75) {
+    tableFillColor = COLOURS.tableAlmostFull;
+  } else if (occupancyRatio > 0) {
+    tableFillColor = COLOURS.tablePartial;
+  } else {
+    tableFillColor = COLOURS.tableEmpty;
+  }
 
   return (
     <Group
@@ -124,7 +155,7 @@ const SeatingTableGroup = React.memo(function SeatingTableGroup({
       {table.shape === 'round' || table.shape === 'cocktail' ? (
         <Circle
           radius={table.width / 2}
-          fill={COLOURS.tableFill}
+          fill={tableFillColor}
           stroke={isSelected ? '#2563EB' : COLOURS.tableStroke}
           strokeWidth={isSelected ? 2 : 1}
         />
@@ -135,23 +166,76 @@ const SeatingTableGroup = React.memo(function SeatingTableGroup({
           width={table.width}
           height={table.height}
           cornerRadius={4}
-          fill={COLOURS.tableFill}
+          fill={tableFillColor}
           stroke={isSelected ? '#2563EB' : COLOURS.tableStroke}
           strokeWidth={isSelected ? 2 : 1}
         />
       )}
 
+      {/* Heatmap overlay */}
+      {heatmapMode && (() => {
+        const fillPercent = table.capacity > 0 ? (occupiedCount / table.capacity) * 100 : 0;
+        const style = getHeatmapStyle(fillPercent);
+        if (!style) return null;
+        return table.shape === 'round' || table.shape === 'cocktail' ? (
+          <Circle
+            radius={table.width / 2}
+            fill={style.color}
+            opacity={style.opacity}
+            listening={false}
+          />
+        ) : (
+          <Rect
+            x={-table.width / 2}
+            y={-table.height / 2}
+            width={table.width}
+            height={table.height}
+            cornerRadius={4}
+            fill={style.color}
+            opacity={style.opacity}
+            listening={false}
+          />
+        );
+      })()}
+
       {/* Table label */}
       <Text
         text={table.label}
         x={-table.width / 2}
-        y={hasNoSeats ? -14 : -6}
+        y={hasNoSeats ? -14 : (heatmapMode ? -14 : -6)}
         width={table.width}
         align="center"
-        fontSize={11}
-        fontStyle="600"
+        fontSize={heatmapMode ? 12 : 11}
+        fontStyle={heatmapMode ? 'bold' : '600'}
         fill="#475569"
       />
+
+      {/* Heatmap occupancy count */}
+      {heatmapMode && table.capacity > 0 && (
+        <Text
+          text={`${occupiedCount}/${table.capacity}`}
+          x={-table.width / 2}
+          y={0}
+          width={table.width}
+          align="center"
+          fontSize={13}
+          fontStyle="bold"
+          fill={occupiedCount >= table.capacity ? '#16A34A' : occupiedCount > 0 ? '#1e293b' : '#94a3b8'}
+          listening={false}
+        />
+      )}
+
+      {/* Note indicator */}
+      {table.note && (
+        <Text
+          text="✎"
+          x={table.width / 2 - 10}
+          y={-(table.shape === 'round' || table.shape === 'cocktail' ? table.width : table.height) / 2 + 2}
+          fontSize={9}
+          fill="#6366f1"
+          listening={false}
+        />
+      )}
 
       {/* "Click to add seats" prompt for zero-capacity tables */}
       {hasNoSeats && (
@@ -294,7 +378,7 @@ const SeatingTableGroup = React.memo(function SeatingTableGroup({
 /*  SeatingCanvasInner — main canvas component                        */
 /* ------------------------------------------------------------------ */
 
-export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCanvasInnerProps>(function SeatingCanvasInner({ showConstraints, draggedGuestId }, ref) {
+export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCanvasInnerProps>(function SeatingCanvasInner({ showConstraints, draggedGuestId, heatmapMode }, ref) {
   const guests = useSeatingStore((s) => s.guests);
   const venue = useSeatingStore((s) => s.venue);
   const constraints = useSeatingStore((s) => s.constraints);
@@ -763,7 +847,43 @@ export const SeatingCanvasInner = forwardRef<SeatingCanvasInnerHandle, SeatingCa
                 onSeatDragStart={handleSeatDragStart}
                 onSeatClick={handleSeatClick}
                 seatDragRef={seatDragRef}
+                heatmapMode={heatmapMode}
               />
+            );
+          })}
+
+          {/* Drop zone highlight rings when dragging from guest list */}
+          {isDraggingFromList && venue.tables.map((table) => {
+            const data = tableDataMap.get(table.id);
+            if (!data || data.isFull) return null;
+            return (
+              <Group key={`dz-${table.id}`} x={table.position.x} y={table.position.y} rotation={table.rotation} listening={false}>
+                {table.shape === 'round' || table.shape === 'cocktail' ? (
+                  <Circle
+                    radius={table.width / 2 + 6}
+                    fill="transparent"
+                    stroke="#3b82f6"
+                    strokeWidth={3}
+                    opacity={0.5}
+                    dash={[6, 4]}
+                    listening={false}
+                  />
+                ) : (
+                  <Rect
+                    x={-table.width / 2 - 6}
+                    y={-table.height / 2 - 6}
+                    width={table.width + 12}
+                    height={table.height + 12}
+                    cornerRadius={6}
+                    fill="transparent"
+                    stroke="#3b82f6"
+                    strokeWidth={3}
+                    opacity={0.5}
+                    dash={[6, 4]}
+                    listening={false}
+                  />
+                )}
+              </Group>
             );
           })}
         </Layer>

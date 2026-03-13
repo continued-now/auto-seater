@@ -17,26 +17,45 @@ export function validateConstraints(
     const guestB = guestMap.get(guestBId);
 
     if (!guestA || !guestB) continue;
-    if (!guestA.tableId || !guestB.tableId) continue;
 
-    const sameTable = guestA.tableId === guestB.tableId;
+    const bothSeated = Boolean(guestA.tableId && guestB.tableId);
+    const sameTable = bothSeated && guestA.tableId === guestB.tableId;
 
-    if (constraint.type === 'must-sit-together' && !sameTable) {
-      const tableA = tableMap.get(guestA.tableId);
-      const tableB = tableMap.get(guestB.tableId);
+    if (bothSeated) {
+      if (constraint.type === 'must-sit-together' && !sameTable) {
+        const tableA = tableMap.get(guestA.tableId!);
+        const tableB = tableMap.get(guestB.tableId!);
+        violations.push({
+          constraintId: constraint.id,
+          tableId: guestA.tableId!,
+          message: `${guestA.name} and ${guestB.name} must sit together but are at ${tableA?.label ?? 'unknown'} and ${tableB?.label ?? 'unknown'}`,
+        });
+      }
+
+      if (constraint.type === 'must-not-sit-together' && sameTable) {
+        const table = tableMap.get(guestA.tableId!);
+        violations.push({
+          constraintId: constraint.id,
+          tableId: guestA.tableId!,
+          message: `${guestA.name} and ${guestB.name} must not sit together but are both at ${table?.label ?? 'unknown'}`,
+        });
+      }
+
+      if (constraint.type === 'prefer-near' && !sameTable) {
+        violations.push({
+          constraintId: constraint.id,
+          tableId: guestA.tableId!,
+          message: `${guestA.name} and ${guestB.name} are preferred to sit near each other`,
+          severity: 'warning',
+        });
+      }
+    } else if (constraint.type === 'prefer-near' && (guestA.tableId || guestB.tableId)) {
+      // One seated, one unassigned — still a soft warning
       violations.push({
         constraintId: constraint.id,
-        tableId: guestA.tableId,
-        message: `${guestA.name} and ${guestB.name} must sit together but are at ${tableA?.label ?? 'unknown'} and ${tableB?.label ?? 'unknown'}`,
-      });
-    }
-
-    if (constraint.type === 'must-not-sit-together' && sameTable) {
-      const table = tableMap.get(guestA.tableId);
-      violations.push({
-        constraintId: constraint.id,
-        tableId: guestA.tableId,
-        message: `${guestA.name} and ${guestB.name} must not sit together but are both at ${table?.label ?? 'unknown'}`,
+        tableId: guestA.tableId ?? guestB.tableId ?? '',
+        message: `${guestA.name} and ${guestB.name} are preferred to sit near each other`,
+        severity: 'warning',
       });
     }
   }

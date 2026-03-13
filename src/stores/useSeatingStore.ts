@@ -14,9 +14,11 @@ import { defaultVenueConfig, PREBUILT_TEMPLATES } from '@/lib/venue-templates';
 import { validateConstraints } from '@/lib/constraint-validator';
 import { getTableDefaults } from '@/lib/table-geometry';
 import { saveToIndexedDB } from '@/lib/storage';
+import { saveEvent, loadEvent, deleteEvent as deleteEventFromDB } from '@/lib/event-storage';
 import { computeAutoAssignments } from '@/lib/auto-assign';
 import { getAllRoomRects, getRoomCenter } from '@/lib/room-geometry';
 import { createDemoData } from '@/lib/demo-data';
+import { FREE_GUEST_LIMIT } from '@/lib/purchase';
 import type { TableShape } from '@/types/venue';
 
 // Pre-demo snapshot shape
@@ -60,8 +62,13 @@ export interface SeatingState {
   templates: VenueTemplate[];
   userTier: UserTier;
 
+  // Multi-event
+  eventName: string;
+  currentEventId: string | null;
+
   // UI (excluded from undo/redo)
   currentStep: AppStep;
+  eventDate: string | null;
   selectedGuestIds: string[];
   selectedTableId: string | null;
   selectedElementId: string | null;
@@ -90,6 +97,7 @@ export interface SeatingState {
   removeGuestDietaryTag: (id: string, tag: DietaryTag) => void;
   addGuestAccessibilityTag: (id: string, tag: AccessibilityTag) => void;
   removeGuestAccessibilityTag: (id: string, tag: AccessibilityTag) => void;
+  addPlusOne: (guestId: string) => string;
 
   // Household actions
   createHousehold: (name: string, guestIds: string[]) => string;
@@ -170,6 +178,14 @@ export interface SeatingState {
   setPanOffset: (offset: { x: number; y: number }) => void;
   setUserTier: (tier: UserTier) => void;
   setActiveTemplateId: (id: string | null) => void;
+  setEventDate: (date: string | null) => void;
+  setEventName: (name: string) => void;
+  switchEvent: (eventId: string) => Promise<void>;
+  createNewEvent: (name: string) => Promise<void>;
+  deleteEvent: (eventId: string) => Promise<void>;
+  seatingFilterTab: 'all' | 'unseated' | 'seated';
+  setSeatingFilterTab: (tab: 'all' | 'unseated' | 'seated') => void;
+  loadSnapshot: (snapshot: { guests: Guest[]; households: Household[]; socialCircles: SocialCircle[]; venue: VenueConfig; constraints: Constraint[]; templates: VenueTemplate[] }) => void;
 
   // Demo actions
   startDemo: () => void;
@@ -191,8 +207,13 @@ export const useSeatingStore = create<SeatingState>()(
         templates: [],
         userTier: 'free',
 
+        // Multi-event
+        eventName: 'Untitled Event',
+        currentEventId: null,
+
         // Initial UI
         currentStep: 'guests',
+        eventDate: null,
         selectedGuestIds: [],
         selectedTableId: null,
         selectedElementId: null,
@@ -205,6 +226,7 @@ export const useSeatingStore = create<SeatingState>()(
         zoom: 1,
         panOffset: { x: 0, y: 0 },
         lastSavedAt: null,
+        seatingFilterTab: 'all',
 
         // Demo mode
         isDemoMode: false,
@@ -213,6 +235,10 @@ export const useSeatingStore = create<SeatingState>()(
 
         // Guest actions
         addGuest: (guestData) => {
+          const currentState = get();
+          if (currentState.userTier === 'free' && currentState.guests.length >= FREE_GUEST_LIMIT) {
+            return '';
+          }
           const id = createId();
           const now = Date.now();
           set((state) => {
@@ -273,7 +299,13 @@ export const useSeatingStore = create<SeatingState>()(
 
         importGuests: (guests) => {
           set((state) => {
-            state.guests.push(...guests);
+            let toImport = guests;
+            if (state.userTier === 'free') {
+              const remaining = FREE_GUEST_LIMIT - state.guests.length;
+              if (remaining <= 0) return;
+              toImport = guests.slice(0, remaining);
+            }
+            state.guests.push(...toImport);
             state.lastSavedAt = Date.now();
           });
           debouncedIDBSave(get());
@@ -339,6 +371,49 @@ export const useSeatingStore = create<SeatingState>()(
             }
           });
           debouncedIDBSave(get());
+        },
+
+        addPlusOne: (guestId) => {
+          const currentState = get();
+          const original = currentState.guests.find((g) => g.id === guestId);
+          if (!original) return '';
+          if (currentState.userTier === 'free' && currentState.guests.length >= FREE_GUEST_LIMIT) {
+            return '';
+          }
+          const id = createId();
+          const now = Date.now();
+          set((state) => {
+            state.guests.push({
+              id,
+              name: `${original.name} +1`,
+              email: '',
+              phone: '',
+              rsvpStatus: 'pending',
+              dietaryTags: [],
+              accessibilityTags: [],
+              householdId: original.householdId,
+              socialCircleIds: [],
+              tableId: null,
+              seatIndex: null,
+              notes: '',
+              checkedInAt: null,
+              checkedInBy: null,
+              isPlusOne: true,
+              plusOneOf: guestId,
+              createdAt: now,
+              updatedAt: now,
+            });
+            // Add plus-one to the same household if original has one
+            if (original.householdId) {
+              const household = state.households.find((h) => h.id === original.householdId);
+              if (household) {
+                household.guestIds.push(id);
+              }
+            }
+            state.lastSavedAt = now;
+          });
+          debouncedIDBSave(get());
+          return id;
         },
 
         // Household actions
@@ -1132,6 +1207,153 @@ export const useSeatingStore = create<SeatingState>()(
         setPanOffset: (offset) => set((state) => { state.panOffset = offset; }),
         setUserTier: (tier) => set((state) => { state.userTier = tier; }),
         setActiveTemplateId: (id) => set((state) => { state.activeTemplateId = id; }),
+        setEventDate: (date) => set((state) => { state.eventDate = date; }),
+
+        setSeatingFilterTab: (tab) => set((state) => { state.seatingFilterTab = tab; }),
+
+        loadSnapshot: (snapshot) => {
+          set((state) => {
+            let guests = snapshot.guests as Guest[];
+            // Enforce guest limit for free tier
+            if (state.userTier === 'free' && guests.length > FREE_GUEST_LIMIT) {
+              guests = guests.slice(0, FREE_GUEST_LIMIT);
+            }
+            state.guests = guests;
+            state.households = snapshot.households as Household[];
+            state.socialCircles = snapshot.socialCircles as SocialCircle[];
+            state.venue = snapshot.venue as VenueConfig;
+            state.constraints = snapshot.constraints as Constraint[];
+            state.templates = snapshot.templates as VenueTemplate[];
+            state.lastSavedAt = Date.now();
+            state.selectedGuestIds = [];
+            state.selectedTableId = null;
+            state.selectedElementId = null;
+            state.selectedElementType = null;
+          });
+          debouncedIDBSave(get());
+        },
+
+        // Multi-event actions
+        setEventName: (name) => {
+          set((state) => {
+            state.eventName = name;
+          });
+          const current = get();
+          if (current.currentEventId) {
+            saveEvent(current.currentEventId, name, {
+              guests: current.guests,
+              households: current.households,
+              socialCircles: current.socialCircles,
+              venue: current.venue,
+              constraints: current.constraints,
+              templates: current.templates,
+            });
+          }
+        },
+
+        switchEvent: async (eventId) => {
+          const current = get();
+          // Auto-save current event before switching
+          if (current.currentEventId) {
+            await saveEvent(current.currentEventId, current.eventName, {
+              guests: current.guests,
+              households: current.households,
+              socialCircles: current.socialCircles,
+              venue: current.venue,
+              constraints: current.constraints,
+              templates: current.templates,
+            });
+          }
+          // Load the selected event
+          const snapshot = await loadEvent(eventId);
+          if (!snapshot) return;
+          set((state) => {
+            state.guests = snapshot.guests;
+            state.households = snapshot.households;
+            state.socialCircles = snapshot.socialCircles;
+            state.venue = snapshot.venue;
+            state.constraints = snapshot.constraints;
+            state.templates = snapshot.templates;
+            state.eventName = snapshot.meta.name;
+            state.currentEventId = snapshot.meta.id;
+            state.lastSavedAt = Date.now();
+            state.selectedGuestIds = [];
+            state.selectedTableId = null;
+            state.selectedElementId = null;
+            state.selectedElementType = null;
+          });
+          debouncedIDBSave(get());
+        },
+
+        createNewEvent: async (name) => {
+          const current = get();
+          // Auto-save current event before creating new one
+          if (current.currentEventId) {
+            await saveEvent(current.currentEventId, current.eventName, {
+              guests: current.guests,
+              households: current.households,
+              socialCircles: current.socialCircles,
+              venue: current.venue,
+              constraints: current.constraints,
+              templates: current.templates,
+            });
+          }
+          const newId = createId();
+          // Reset to blank state
+          set((state) => {
+            state.guests = [];
+            state.households = [];
+            state.socialCircles = [];
+            state.venue = { ...defaultVenueConfig };
+            state.constraints = [];
+            state.templates = [];
+            state.eventName = name;
+            state.currentEventId = newId;
+            state.currentStep = 'guests';
+            state.lastSavedAt = Date.now();
+            state.selectedGuestIds = [];
+            state.selectedTableId = null;
+            state.selectedElementId = null;
+            state.selectedElementType = null;
+            state.eventDate = null;
+          });
+          // Save the new (empty) event to IndexedDB
+          await saveEvent(newId, name, {
+            guests: [],
+            households: [],
+            socialCircles: [],
+            venue: { ...defaultVenueConfig },
+            constraints: [],
+            templates: [],
+          });
+          debouncedIDBSave(get());
+        },
+
+        deleteEvent: async (eventId) => {
+          await deleteEventFromDB(eventId);
+          const current = get();
+          // If deleting the current event, reset to blank state
+          if (current.currentEventId === eventId) {
+            set((state) => {
+              state.guests = [];
+              state.households = [];
+              state.socialCircles = [];
+              state.venue = { ...defaultVenueConfig };
+              state.constraints = [];
+              state.templates = [];
+              state.eventName = 'Untitled Event';
+              state.currentEventId = null;
+              state.currentStep = 'guests';
+              state.lastSavedAt = Date.now();
+              state.selectedGuestIds = [];
+              state.selectedTableId = null;
+              state.selectedElementId = null;
+              state.selectedElementType = null;
+              state.eventDate = null;
+            });
+            debouncedIDBSave(get());
+          }
+        },
 
         // Demo actions
         startDemo: () => {
@@ -1267,14 +1489,14 @@ export const useSeatingStore = create<SeatingState>()(
         // zundo temporal config — exclude UI state from undo/redo
         limit: 100,
         partialize: (state) => {
-          const { currentStep, selectedGuestIds, selectedTableId, selectedElementId, selectedElementType, selectedRoomId, canvasToolMode, activeTemplateId, searchQuery, checkInSearchQuery, zoom, panOffset, lastSavedAt, userTier, isDemoMode, demoStep, _preDemoSnapshot, ...rest } = state;
+          const { currentStep, eventDate, eventName, currentEventId, selectedGuestIds, selectedTableId, selectedElementId, selectedElementType, selectedRoomId, canvasToolMode, activeTemplateId, searchQuery, checkInSearchQuery, zoom, panOffset, lastSavedAt, userTier, isDemoMode, demoStep, _preDemoSnapshot, seatingFilterTab, ...rest } = state;
           return rest;
         },
       }
     ),
     {
       name: 'auto-seater-storage',
-      version: 7,
+      version: 8,
       partialize: (state) => {
         if (state.isDemoMode) return {} as never;
         return {
@@ -1286,6 +1508,9 @@ export const useSeatingStore = create<SeatingState>()(
           templates: state.templates,
           userTier: state.userTier,
           currentStep: state.currentStep,
+          eventDate: state.eventDate,
+          eventName: state.eventName,
+          currentEventId: state.currentEventId,
           lastSavedAt: state.lastSavedAt,
         };
       },
@@ -1333,6 +1558,10 @@ export const useSeatingStore = create<SeatingState>()(
               if (guest.checkedInBy === undefined) guest.checkedInBy = null;
             }
           }
+        }
+        if (version < 8) {
+          if (state.eventName === undefined) state.eventName = 'Untitled Event';
+          if (state.currentEventId === undefined) state.currentEventId = null;
         }
         return state as never;
       },

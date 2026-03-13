@@ -1,9 +1,11 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import Fuse from 'fuse.js';
-import { ScanLine } from 'lucide-react';
+import { ScanLine, UserPlus } from 'lucide-react';
+import { toast } from 'sonner';
 import { useSeatingStore } from '@/stores/useSeatingStore';
+import { fireConfettiSides } from '@/lib/confetti';
 import { CheckInHeader } from './CheckInHeader';
 import { CheckInSearch } from './CheckInSearch';
 import { CheckInGuestCard } from './CheckInGuestCard';
@@ -25,13 +27,29 @@ export function CheckInStep() {
   const checkInSearchQuery = useSeatingStore((s) => s.checkInSearchQuery);
   const setCheckInSearchQuery = useSeatingStore((s) => s.setCheckInSearchQuery);
   const setCurrentStep = useSeatingStore((s) => s.setCurrentStep);
+  const addGuest = useSeatingStore((s) => s.addGuest);
+  const assignGuestToTable = useSeatingStore((s) => s.assignGuestToTable);
 
   const [filterTab, setFilterTab] = useState<CheckInFilter>('expected');
   const [scannerMode, setScannerMode] = useState(false);
   const [badgeExportOpen, setBadgeExportOpen] = useState(false);
+  const [showWalkIn, setShowWalkIn] = useState(false);
+  const [walkInName, setWalkInName] = useState('');
 
   const expectedGuests = useMemo(() => getExpectedGuests(guests), [guests]);
   const stats = useMemo(() => computeCheckInStats(guests), [guests]);
+
+  const confettiFiredRef = useRef(false);
+  useEffect(() => {
+    if (stats.total > 0 && stats.arrived === stats.total && !confettiFiredRef.current) {
+      confettiFiredRef.current = true;
+      fireConfettiSides();
+      toast.success('All guests have checked in!');
+    }
+    if (stats.arrived < stats.total) {
+      confettiFiredRef.current = false;
+    }
+  }, [stats.arrived, stats.total]);
 
   // Fuse.js search
   const fuse = useMemo(

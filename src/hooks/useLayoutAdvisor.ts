@@ -4,6 +4,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import type { AdvisorMode, EventType, LayoutAdvisorStep, LayoutAdvisorResponse } from '@/types/layout-advisor';
 import type { VenueConfig } from '@/types/venue';
 import { useSeatingStore } from '@/stores/useSeatingStore';
+import { getPurchase } from '@/lib/purchase';
 
 const STATUS_MESSAGES = [
   'Analyzing room dimensions...',
@@ -65,9 +66,13 @@ export function useLayoutAdvisor() {
     abortRef.current = abort;
 
     try {
+      const purchase = getPurchase();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (purchase?.verified && purchase.sessionId) headers['x-purchase-token'] = purchase.sessionId;
+
       const response = await fetch('/api/layout-advisor', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           mode,
           venueConfig,

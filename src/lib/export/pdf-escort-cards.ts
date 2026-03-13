@@ -7,6 +7,7 @@ import { getPageDimensions, triggerDownload, formatDate } from './export-utils';
 interface EscortEntry {
   name: string;
   tableLabel: string;
+  tableNote?: string;
 }
 
 export function exportEscortCardsPDF(
@@ -27,10 +28,14 @@ export function exportEscortCardsPDF(
   // Build sorted entries (by last name)
   const entries: EscortEntry[] = guests
     .filter((g) => g.tableId)
-    .map((g) => ({
-      name: g.name,
-      tableLabel: tableMap.get(g.tableId!)?.label ?? 'Unassigned',
-    }))
+    .map((g) => {
+      const table = tableMap.get(g.tableId!);
+      return {
+        name: g.name,
+        tableLabel: table?.label ?? 'Unassigned',
+        tableNote: table?.note || undefined,
+      };
+    })
     .sort((a, b) => {
       const lastA = a.name.split(' ').pop() ?? a.name;
       const lastB = b.name.split(' ').pop() ?? b.name;
@@ -43,7 +48,7 @@ export function exportEscortCardsPDF(
   const contentWidth = page.width - margin * 2;
   const colGap = 8;
   const colWidth = (contentWidth - colGap * (options.columns - 1)) / options.columns;
-  const lineHeight = 5.5;
+  const lineHeight = 7; // extra height to accommodate optional note line
   const headerHeight = 20;
   const footerMargin = 10;
   const maxY = page.height - margin - footerMargin;
@@ -126,6 +131,16 @@ function drawEscortEntry(
       doc.text(dots.join(' '), dotsStart, y);
       doc.setFontSize(9);
     }
+    doc.setTextColor(30, 30, 30);
+  }
+
+  // Draw table note in italic grey on second line
+  if (entry.tableNote) {
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'italic');
+    doc.setTextColor(150, 150, 150);
+    doc.text(entry.tableNote, x + width, y + 3.5, { align: 'right' });
+    doc.setFont('helvetica', 'normal');
     doc.setTextColor(30, 30, 30);
   }
 }

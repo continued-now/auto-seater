@@ -108,6 +108,18 @@ export function computeAutoAssignments(
     }
   }
 
+  // 4b. Build prefer-near lookup (soft constraint — scoring bonus, not union-find merge)
+  const preferNear = new Map<string, Set<string>>();
+  for (const c of constraints) {
+    if (c.type === 'prefer-near') {
+      const [a, b] = c.guestIds;
+      if (!preferNear.has(a)) preferNear.set(a, new Set());
+      if (!preferNear.has(b)) preferNear.set(b, new Set());
+      preferNear.get(a)!.add(b);
+      preferNear.get(b)!.add(a);
+    }
+  }
+
   // 5. Build social circle membership for tiebreaking
   const guestCircles = new Map<string, Set<string>>();
   for (const circle of socialCircles) {
@@ -215,7 +227,18 @@ export function computeAutoAssignments(
       // Score: social overlap (higher = better), then tighter fit (lower remaining = better)
       const overlap = socialOverlap(group, table.id);
       const tightness = 1000 - (remaining - group.length); // prefer tighter fit
-      const score = overlap * 10000 + tightness;
+      // Prefer-near bonus: +10 for each prefer-near partner already at this table
+      let preferNearBonus = 0;
+      const occupants = tableOccupants.get(table.id)!;
+      for (const gid of group) {
+        const preferred = preferNear.get(gid);
+        if (preferred) {
+          for (const occ of occupants) {
+            if (preferred.has(occ)) preferNearBonus += 10;
+          }
+        }
+      }
+      const score = overlap * 10000 + preferNearBonus * 1000 + tightness;
 
       if (score > bestScore) {
         bestScore = score;
@@ -243,8 +266,17 @@ export function computeAutoAssignments(
           const groupOverlap = group.filter(
             (other) => other !== gid && tableOccupants.get(table.id)!.has(other)
           ).length;
+          // Prefer-near bonus: +10 for each prefer-near partner already at this table
+          let indPreferNearBonus = 0;
+          const indOccupants = tableOccupants.get(table.id)!;
+          const preferred = preferNear.get(gid);
+          if (preferred) {
+            for (const occ of indOccupants) {
+              if (preferred.has(occ)) indPreferNearBonus += 10;
+            }
+          }
           const tightness = 1000 - remaining;
-          const score = groupOverlap * 100000 + overlap * 10000 + tightness;
+          const score = groupOverlap * 100000 + overlap * 10000 + indPreferNearBonus * 1000 + tightness;
 
           if (score > indBestScore) {
             indBestScore = score;

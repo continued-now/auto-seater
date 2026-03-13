@@ -112,6 +112,26 @@ export function useCSVImport() {
     [parsedGuests, importGuests]
   );
 
+  const editParsedGuest = useCallback(
+    (index: number, updates: Partial<Guest>) => {
+      setParsedGuests((prev) => {
+        const next = [...prev];
+        if (index >= 0 && index < next.length) {
+          next[index] = { ...next[index], ...updates };
+        }
+        return next;
+      });
+    },
+    []
+  );
+
+  const removeParsedGuest = useCallback(
+    (index: number) => {
+      setParsedGuests((prev) => prev.filter((_, i) => i !== index));
+    },
+    []
+  );
+
   const reset = useCallback(() => {
     setStep('idle');
     setCsvResult(null);
@@ -133,6 +153,8 @@ export function useCSVImport() {
     handleText,
     confirmMapping,
     confirmPreview,
+    editParsedGuest,
+    removeParsedGuest,
     resolveAndImport,
     reset,
   };

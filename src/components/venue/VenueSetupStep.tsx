@@ -42,6 +42,7 @@ import {
   MoveHorizontal,
   MoveVertical,
   X,
+  ListOrdered,
 } from 'lucide-react';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { Button } from '@/components/ui/Button';
@@ -52,6 +53,7 @@ import { Dialog, DialogContent } from '@/components/ui/Dialog';
 import { PREBUILT_TEMPLATES, COMMON_FIXTURE_TYPES, TEMPLATE_FIXTURES } from '@/lib/venue-templates';
 import { ProBadge } from '@/components/ui/ProBadge';
 import { useFeatureGate } from '@/hooks/useFeatureGate';
+import { UpgradeDialog } from '@/components/ui/UpgradeDialog';
 import { createId } from '@/lib/id';
 import { getAllRoomRects, computeNewRoomPosition, getVenueBoundingBox, getRoomCenter } from '@/lib/room-geometry';
 import type { TableShape, FixtureType } from '@/types/venue';
@@ -65,7 +67,10 @@ const VenueCanvasInner = dynamic(
     ssr: false,
     loading: () => (
       <div className="flex-1 bg-slate-100 flex items-center justify-center">
-        <p className="text-sm text-muted-foreground">Loading canvas...</p>
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-slate-200 border-t-blue-500 rounded-full animate-spin" />
+          <span className="text-xs text-slate-400">Loading canvas</span>
+        </div>
       </div>
     ),
   }
@@ -130,7 +135,7 @@ export function VenueSetupStep() {
   const selectedRoomId = useSeatingStore((s) => s.selectedRoomId);
   const setSelectedRoomId = useSeatingStore((s) => s.setSelectedRoomId);
 
-  const { canAccess } = useFeatureGate();
+  const { canAccess, requirePro, upgradeOpen, setUpgradeOpen, upgradeFeature } = useFeatureGate();
   const canCustomDimensions = canAccess('custom-dimensions');
 
   const selectedTable = selectedElementType === 'table' ? venue.tables.find((t) => t.id === selectedElementId) ?? null : null;
@@ -158,6 +163,10 @@ export function VenueSetupStep() {
   const [photoDialogOpen, setPhotoDialogOpen] = useState(false);
   const [advisorDialogOpen, setAdvisorDialogOpen] = useState(false);
   const hasObjectsForAdvisor = venue.tables.length > 0 || venue.fixtures.length > 0;
+
+  // Renumber tables state
+  const [renumberPrefix, setRenumberPrefix] = useState<'Table ' | 'T' | 'custom'>('Table ');
+  const [renumberCustomPrefix, setRenumberCustomPrefix] = useState('');
 
   const pxPerUnit = venue.unit === 'ft' ? 15 : 30;
   const roomRects = useMemo(() => getAllRoomRects(venue, pxPerUnit), [venue, pxPerUnit]);
@@ -340,6 +349,20 @@ export function VenueSetupStep() {
     toast.success('Template saved');
   }, [templateName, templateDesc, saveTemplate]);
 
+  const handleRenumberTables = useCallback(() => {
+    if (venue.tables.length === 0) return;
+    const prefix = renumberPrefix === 'custom' ? renumberCustomPrefix : renumberPrefix;
+    const sorted = [...venue.tables].sort((a, b) => {
+      const dy = a.position.y - b.position.y;
+      if (Math.abs(dy) > 5) return dy;
+      return a.position.x - b.position.x;
+    });
+    sorted.forEach((table, i) => {
+      updateTable(table.id, { label: `${prefix}${i + 1}` });
+    });
+    toast.success(`Renumbered ${sorted.length} table${sorted.length !== 1 ? 's' : ''}`);
+  }, [venue.tables, renumberPrefix, renumberCustomPrefix, updateTable]);
+
   // Compute wall length for display
   const wallLength = selectedWall
     ? Math.sqrt(
@@ -471,11 +494,12 @@ export function VenueSetupStep() {
                 size="sm"
                 className="w-full"
                 onClick={() => {
+                  if (!requirePro('multi-room', 'Multi-room layouts')) return;
                   setNewRoomLabel(`Room ${(venue.rooms?.length ?? 0) + 2}`);
                   setAddRoomDialogOpen(true);
                 }}
               >
-                <Plus size={14} /> Add Room
+                <Plus size={14} /> Add Room {!canAccess('multi-room') && <ProBadge />}
               </Button>
             </div>
           </SidebarSection>
@@ -496,6 +520,62 @@ export function VenueSetupStep() {
               ))}
             </div>
           </SidebarSection>
+
+          {/* Renumber Tables */}
+          {venue.tables.length > 0 && (
+            <SidebarSection title="Renumber Tables">
+              <div className="space-y-2">
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setRenumberPrefix('Table ')}
+                    className={`flex-1 px-2 py-1 rounded-md border text-[10px] font-medium transition-colors cursor-pointer ${
+                      renumberPrefix === 'Table '
+                        ? 'border-blue-400 bg-blue-50 text-blue-700'
+                        : 'border-border hover:border-blue-300 hover:bg-blue-50 text-slate-600'
+                    }`}
+                  >
+                    Table 1
+                  </button>
+                  <button
+                    onClick={() => setRenumberPrefix('T')}
+                    className={`flex-1 px-2 py-1 rounded-md border text-[10px] font-medium transition-colors cursor-pointer ${
+                      renumberPrefix === 'T'
+                        ? 'border-blue-400 bg-blue-50 text-blue-700'
+                        : 'border-border hover:border-blue-300 hover:bg-blue-50 text-slate-600'
+                    }`}
+                  >
+                    T1
+                  </button>
+                  <button
+                    onClick={() => setRenumberPrefix('custom')}
+                    className={`flex-1 px-2 py-1 rounded-md border text-[10px] font-medium transition-colors cursor-pointer ${
+                      renumberPrefix === 'custom'
+                        ? 'border-blue-400 bg-blue-50 text-blue-700'
+                        : 'border-border hover:border-blue-300 hover:bg-blue-50 text-slate-600'
+                    }`}
+                  >
+                    Custom
+                  </button>
+                </div>
+                {renumberPrefix === 'custom' && (
+                  <Input
+                    placeholder="Prefix, e.g. Tbl "
+                    value={renumberCustomPrefix}
+                    onChange={(e) => setRenumberCustomPrefix(e.target.value)}
+                    className="text-xs"
+                  />
+                )}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="w-full"
+                  onClick={handleRenumberTables}
+                >
+                  <ListOrdered size={14} /> Renumber ({venue.tables.length})
+                </Button>
+              </div>
+            </SidebarSection>
+          )}
 
           {/* Structural — wall draw tool */}
           <SidebarSection title="Structural">
@@ -721,9 +801,12 @@ export function VenueSetupStep() {
                 variant="secondary"
                 size="sm"
                 className="w-full justify-start"
-                onClick={() => setPhotoDialogOpen(true)}
+                onClick={() => {
+                  if (!requirePro('photo-to-room', 'AI Photo-to-Room')) return;
+                  setPhotoDialogOpen(true);
+                }}
               >
-                <Camera size={14} /> Photo to Room <ProBadge />
+                <Camera size={14} /> Photo to Room {!canAccess('photo-to-room') && <ProBadge />}
               </Button>
               <Tooltip content={hasObjectsForAdvisor ? 'Analyze and optimize your layout' : 'Add tables or fixtures first'}>
                 <Button
@@ -731,9 +814,12 @@ export function VenueSetupStep() {
                   size="sm"
                   className="w-full justify-start"
                   disabled={!hasObjectsForAdvisor}
-                  onClick={() => setAdvisorDialogOpen(true)}
+                  onClick={() => {
+                    if (!requirePro('layout-advisor', 'AI Layout Advisor')) return;
+                    setAdvisorDialogOpen(true);
+                  }}
                 >
-                  <Sparkles size={14} /> AI Layout Advisor <ProBadge />
+                  <Sparkles size={14} /> AI Layout Advisor {!canAccess('layout-advisor') && <ProBadge />}
                 </Button>
               </Tooltip>
             </div>
@@ -806,6 +892,28 @@ export function VenueSetupStep() {
           {/* Canvas */}
           <div ref={canvasContainerRef} className="flex-1 relative bg-slate-100 overflow-hidden">
             <VenueCanvasInner width={canvasSize.width} height={canvasSize.height} />
+            {/* Empty state overlay */}
+            {venue.tables.length === 0 && venue.fixtures.length === 0 && (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+                <div className="text-center max-w-xs pointer-events-auto">
+                  <div className="mx-auto w-14 h-14 rounded-2xl bg-white/80 border border-slate-200 flex items-center justify-center mb-3 shadow-sm">
+                    <Layers size={24} className="text-slate-400" />
+                  </div>
+                  <h3 className="text-sm font-semibold text-slate-700 mb-1">Start building your venue</h3>
+                  <p className="text-xs text-slate-500 mb-3">
+                    Add tables from the sidebar, or pick a template to get started quickly.
+                  </p>
+                  <div className="flex gap-2 justify-center">
+                    <Button size="sm" variant="primary" onClick={() => addTable('round')}>
+                      <Circle size={12} className="mr-1" /> Add Round Table
+                    </Button>
+                    <Button size="sm" variant="secondary" onClick={() => addTable('rectangular')}>
+                      <RectangleHorizontal size={12} className="mr-1" /> Rectangular
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -836,6 +944,16 @@ export function VenueSetupStep() {
                     updateTable(selectedTable.id, { capacity: Math.max(0, Number(e.target.value) || 0) })
                   }
                 />
+                <div>
+                  <label className="text-xs text-slate-500 block mb-1">Note</label>
+                  <input
+                    type="text"
+                    placeholder="Add note…"
+                    value={selectedTable.note ?? ''}
+                    onChange={(e) => updateTable(selectedTable.id, { note: e.target.value })}
+                    className="w-full text-xs border-0 border-b border-slate-200 bg-transparent px-0 py-0.5 focus:outline-none focus:border-blue-400 text-slate-600 placeholder:text-slate-300"
+                  />
+                </div>
                 {/* Seating side — rectangular/square only */}
                 {(selectedTable.shape === 'rectangular' || selectedTable.shape === 'square') && selectedTable.capacity > 0 && (
                   <div>
@@ -1450,6 +1568,7 @@ export function VenueSetupStep() {
         {/* AI Tools Dialogs */}
         <PhotoToRoomDialog open={photoDialogOpen} onOpenChange={setPhotoDialogOpen} />
         <LayoutAdvisorDialog open={advisorDialogOpen} onOpenChange={setAdvisorDialogOpen} />
+        <UpgradeDialog open={upgradeOpen} onOpenChange={setUpgradeOpen} feature={upgradeFeature} />
       </div>
     </TooltipProvider>
   );

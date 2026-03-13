@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { buildPhotoToRoomPrompt, buildCapturePrompt } from '@/lib/ai-prompt-builder';
 import { parseAIRoomResponse } from '@/lib/ai-room-parser';
+import { verifyPurchaseToken } from '@/lib/verify-purchase-server';
 import type { ExifData, MeasurementInput, CaptureMode, CapturedPhoto, ReferenceDimension } from '@/types/photo-to-room';
 
 interface LegacyMetadata {
@@ -32,6 +33,13 @@ function isCaptureMetadata(meta: unknown): meta is CaptureMetadata {
 }
 
 export async function POST(request: Request) {
+  // Verify Pro purchase before processing AI request
+  const purchaseToken = request.headers.get('x-purchase-token');
+  const verified = await verifyPurchaseToken(purchaseToken);
+  if (!verified) {
+    return NextResponse.json({ error: 'Pro subscription required for AI features' }, { status: 403 });
+  }
+
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return NextResponse.json({ error: 'Server configuration error: missing API key' }, { status: 500 });

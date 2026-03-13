@@ -22,6 +22,11 @@ export function useKeyboardShortcuts() {
         store.temporal.getState().redo();
       }
 
+      // Cmd+S — suppress browser save dialog
+      if (isMod && (e.key === 's' || e.key === 'S') && !e.shiftKey) {
+        e.preventDefault();
+      }
+
       // Skip shortcuts when input is focused
       if (isInputFocused()) return;
 
@@ -47,6 +52,7 @@ export function useKeyboardShortcuts() {
           if (type === 'table') state.deleteTable(id);
           else if (type === 'fixture') state.deleteFixture(id);
           else if (type === 'wall') state.deleteWall(id);
+          else if (type === 'room') state.deleteRoom(id);
           return;
         }
         // Fall back to deleting selected guests

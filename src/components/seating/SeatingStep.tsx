@@ -1,15 +1,20 @@
 'use client';
 
-import { useState, useMemo, useCallback, useRef, type DragEvent } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect, type DragEvent } from 'react';
 import { toast } from 'sonner';
 import dynamic from 'next/dynamic';
 import { useSeatingStore } from '@/stores/useSeatingStore';
+import { useFeatureGate } from '@/hooks/useFeatureGate';
+import { fireConfetti } from '@/lib/confetti';
+import { UpgradeDialog } from '@/components/ui/UpgradeDialog';
+import { ProBadge } from '@/components/ui/ProBadge';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { Tooltip, TooltipProvider } from '@/components/ui/Tooltip';
 import { ExportPanel } from '@/components/export/ExportPanel';
 import { ViolationDetailsPanel } from './ViolationDetailsPanel';
+import { ConflictWizard } from './ConflictWizard';
 import { SeatingStatsPanel } from './SeatingStatsPanel';
 import { rsvpStatusColors, dietaryTagColors } from '@/lib/colour-palette';
 import { getSeatPositions, SEAT_RENDER_RADIUS } from '@/lib/table-geometry';
@@ -33,6 +38,9 @@ import {
   LayoutGrid,
   Wand2,
   Eraser,
+  ArrowLeftRight,
+  Heart,
+  Flame,
 } from 'lucide-react';
 
 const SeatingCanvasInner = dynamic(
@@ -61,13 +69,20 @@ export function SeatingStep() {
   const clearAllAssignments = useSeatingStore((s) => s.clearAllAssignments);
   const getViolations = useSeatingStore((s) => s.getViolations);
   const setCurrentStep = useSeatingStore((s) => s.setCurrentStep);
+  const swapGuests = useSeatingStore((s) => s.swapGuests);
 
-  const [filterTab, setFilterTab] = useState<FilterTab>('all');
+  const { canAccess, requirePro, upgradeOpen, setUpgradeOpen, upgradeFeature } = useFeatureGate();
+
+  const filterTab = useSeatingStore((s) => s.seatingFilterTab);
+  const setFilterTab = useSeatingStore((s) => s.setSeatingFilterTab);
   const [showConstraints, setShowConstraints] = useState(true);
   const [showViolationPanel, setShowViolationPanel] = useState(false);
+  const [showConflictWizard, setShowConflictWizard] = useState(false);
   const [draggedGuestId, setDraggedGuestId] = useState<string | null>(null);
   const [bulkTableId, setBulkTableId] = useState<string | null>(null);
   const [showBulkSelect, setShowBulkSelect] = useState(false);
+  const [pendingBulkAssign, setPendingBulkAssign] = useState<{ tableId: string } | null>(null);
+  const [heatmapMode, setHeatmapMode] = useState(false);
   const [guestPanelOpen, setGuestPanelOpen] = useState(false);
   const [touchDragGuest, setTouchDragGuest] = useState<{ guestId: string; x: number; y: number } | null>(null);
   const touchStartRef = useRef<{ guestId: string; startX: number; startY: number } | null>(null);
@@ -75,6 +90,7 @@ export function SeatingStep() {
   const canvasWrapperRef = useRef<HTMLDivElement>(null);
   const canvasInnerRef = useRef<SeatingCanvasInnerHandle>(null);
   const stageRef = useRef<Konva.Stage | null>(null);
+  const lastClickedIndexRef = useRef<number | null>(null);
 
   // Keep stageRef in sync with canvas inner handle
   const updateStageRef = useCallback(() => {
@@ -178,7 +194,11 @@ export function SeatingStep() {
       // Only assign if drop is reasonably close to a seat
       const maxDropDist = 80 / currentZoom;
       if (bestTable && bestSeatIdx >= 0 && bestDist < maxDropDist) {
+        const occupied = guests.filter((g) => g.tableId === bestTable!.id && g.id !== guestId).length;
         assignGuestToTable(guestId, bestTable.id, bestSeatIdx);
+        if (occupied + 1 > bestTable.capacity) {
+          toast.warning(`${bestTable.label} is now over capacity (${occupied + 1}/${bestTable.capacity})`);
+        }
       }
 
       setDraggedGuestId(null);
@@ -286,32 +306,57 @@ export function SeatingStep() {
 
   // --- Constraint creation ---
   const handleAddConstraint = useCallback(
-    (type: 'must-sit-together' | 'must-not-sit-together') => {
+    (type: 'must-sit-together' | 'must-not-sit-together' | 'prefer-near') => {
       if (selectedGuestIds.length !== 2) return;
       const [a, b] = selectedGuestIds;
       addConstraint(type, [a, b], '');
       setSelectedGuestIds([]);
+      const labels: Record<string, string> = {
+        'must-sit-together': 'Together constraint added',
+        'must-not-sit-together': 'Apart constraint added',
+        'prefer-near': 'Prefer near constraint added',
+      };
+      toast.success(labels[type]);
     },
     [selectedGuestIds, addConstraint, setSelectedGuestIds]
   );
 
+  // --- Swap seats ---
+  const handleSwapSeats = useCallback(() => {
+    if (selectedGuestIds.length !== 2) return;
+    const [a, b] = selectedGuestIds;
+    swapGuests(a, b);
+    setSelectedGuestIds([]);
+    toast.success('Seats swapped');
+  }, [selectedGuestIds, swapGuests, setSelectedGuestIds]);
+
   // --- Bulk assign ---
   const handleBulkAssign = useCallback(() => {
-    if (!bulkTableId || selectedGuestIds.length === 0) return;
-    bulkAssignToTable(selectedGuestIds, bulkTableId);
+    if (!pendingBulkAssign || selectedGuestIds.length === 0) return;
+    const table = venue.tables.find((t) => t.id === pendingBulkAssign.tableId);
+    const seatsLeft = table ? table.capacity - table.assignedGuestIds.length : 0;
+    const overflow = selectedGuestIds.length - seatsLeft;
+    bulkAssignToTable(selectedGuestIds, pendingBulkAssign.tableId);
     setSelectedGuestIds([]);
+    setPendingBulkAssign(null);
     setBulkTableId(null);
     setShowBulkSelect(false);
-  }, [bulkTableId, selectedGuestIds, bulkAssignToTable, setSelectedGuestIds]);
+    if (overflow > 0) {
+      toast.warning(`Assigned ${selectedGuestIds.length} guest${selectedGuestIds.length !== 1 ? 's' : ''} — ${table?.label ?? 'table'} is now over capacity by ${overflow}`);
+    } else {
+      toast.success(`Assigned ${selectedGuestIds.length} guest${selectedGuestIds.length !== 1 ? 's' : ''}`);
+    }
+  }, [pendingBulkAssign, selectedGuestIds, bulkAssignToTable, setSelectedGuestIds, venue.tables]);
 
   const handleAutoAssign = useCallback(() => {
+    if (!requirePro('auto-assign', 'Auto-assign seating')) return;
     const count = autoAssignGuests();
     if (count === 0) {
       toast.info('No eligible guests to assign');
     } else {
       toast.success(`Assigned ${count} guest${count !== 1 ? 's' : ''}`);
     }
-  }, [autoAssignGuests]);
+  }, [autoAssignGuests, requirePro]);
 
   const handleClearAll = useCallback(() => {
     clearAllAssignments();
@@ -319,6 +364,32 @@ export function SeatingStep() {
   }, [clearAllAssignments]);
 
   const seatedCount = useMemo(() => guests.filter((g) => g.tableId).length, [guests]);
+
+  const confettiFiredRef = useRef(false);
+  useEffect(() => {
+    if (guests.length > 0 && seatedCount === guests.length && !confettiFiredRef.current) {
+      confettiFiredRef.current = true;
+      fireConfetti();
+      toast.success('All guests are seated!');
+    }
+    if (seatedCount < guests.length) {
+      confettiFiredRef.current = false;
+    }
+  }, [seatedCount, guests.length]);
+
+  const unassignedConfirmed = useMemo(() => {
+    return guests.filter((g) => g.rsvpStatus === 'confirmed' && !g.tableId);
+  }, [guests]);
+
+  const confirmedCount = useMemo(
+    () => guests.filter((g) => g.rsvpStatus === 'confirmed').length,
+    [guests]
+  );
+  const totalCapacity = useMemo(
+    () => venue.tables.reduce((sum, t) => sum + t.capacity, 0),
+    [venue.tables]
+  );
+  const [capacityDismissed, setCapacityDismissed] = useState(false);
 
   const filterTabs: { key: FilterTab; label: string }[] = [
     { key: 'all', label: 'All' },
@@ -369,6 +440,7 @@ export function SeatingStep() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Escape' && setSearchQuery('')}
                 placeholder="Search guests..."
                 className="w-full h-8 rounded-md border border-slate-200 bg-white pl-8 pr-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-2 focus:outline-blue-500 focus:border-transparent"
               />
@@ -411,10 +483,14 @@ export function SeatingStep() {
           <div className="flex-1 overflow-y-auto">
             {filteredGuests.length === 0 ? (
               <div className="p-4 text-center text-sm text-slate-400">
-                {searchQuery ? 'No guests match your search.' : 'No guests yet.'}
+                {searchQuery
+                  ? 'No guests match your search.'
+                  : filterTab === 'unseated' && guests.length > 0
+                  ? <span className="text-green-600 font-medium">All guests seated!</span>
+                  : 'No guests yet.'}
               </div>
             ) : (
-              filteredGuests.map((guest) => {
+              filteredGuests.map((guest, guestIndex) => {
                 const isSelected = selectedGuestIds.includes(guest.id);
                 const isDragging = draggedGuestId === guest.id;
                 const tableLabel = getTableLabel(guest.tableId);
@@ -434,10 +510,26 @@ export function SeatingStep() {
                       isDragging ? 'opacity-40 scale-95' : ''
                     } ${isSelected ? 'bg-blue-50' : 'hover:bg-slate-50'}`}
                   >
-                    <Checkbox
-                      checked={isSelected}
-                      onCheckedChange={() => toggleGuestSelection(guest.id)}
-                    />
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (e.shiftKey && lastClickedIndexRef.current !== null) {
+                          const start = Math.min(lastClickedIndexRef.current, guestIndex);
+                          const end = Math.max(lastClickedIndexRef.current, guestIndex);
+                          const rangeIds = filteredGuests.slice(start, end + 1).map((g) => g.id);
+                          const merged = new Set([...selectedGuestIds, ...rangeIds]);
+                          setSelectedGuestIds(Array.from(merged));
+                        } else {
+                          toggleGuestSelection(guest.id);
+                        }
+                        lastClickedIndexRef.current = guestIndex;
+                      }}
+                    >
+                      <Checkbox
+                        checked={isSelected}
+                        onCheckedChange={() => { /* handled by parent onClick for shift support */ }}
+                      />
+                    </div>
                     <GripVertical size={12} className="text-slate-300 flex-shrink-0" />
 
                     <div className="flex-1 min-w-0">
@@ -490,6 +582,34 @@ export function SeatingStep() {
 
         {/* Right Panel - Canvas */}
         <div className="flex-1 flex flex-col min-w-0">
+          {/* Capacity warning banner */}
+          {!capacityDismissed && confirmedCount > totalCapacity && venue.tables.length > 0 && (
+            <div className="bg-red-50 border-b border-red-200 px-3 py-2 flex items-center gap-2">
+              <AlertTriangle size={14} className="text-red-500 flex-shrink-0" />
+              <span className="text-sm text-red-800">
+                <strong>{confirmedCount}</strong> confirmed guests but only <strong>{totalCapacity}</strong> seats.{' '}
+                <button onClick={() => setCurrentStep('venue')} className="underline cursor-pointer">Add tables</button>
+              </span>
+              <button onClick={() => setCapacityDismissed(true)} className="ml-auto text-red-400 hover:text-red-600 cursor-pointer">
+                <X size={14} />
+              </button>
+            </div>
+          )}
+          {/* Gap detection banner */}
+          {unassignedConfirmed.length > 0 && venue.tables.length > 0 && (
+            <div className="bg-amber-50 border-b border-amber-200 px-3 py-2 flex items-center gap-2">
+              <AlertTriangle size={14} className="text-amber-600 flex-shrink-0" />
+              <span className="text-sm text-amber-800">
+                <strong>{unassignedConfirmed.length}</strong> confirmed guest{unassignedConfirmed.length !== 1 ? 's' : ''} still need{unassignedConfirmed.length === 1 ? 's' : ''} a seat
+              </span>
+              <button
+                onClick={() => setFilterTab('unseated')}
+                className="text-sm text-amber-700 underline hover:text-amber-900 ml-auto cursor-pointer"
+              >
+                Show unseated
+              </button>
+            </div>
+          )}
           {/* Toolbar */}
           <div className="h-10 border-b border-slate-200 bg-white flex items-center gap-1 px-3 overflow-x-auto">
             {/* Guest panel toggle (mobile only) */}
@@ -538,6 +658,18 @@ export function SeatingStep() {
               </Button>
             </Tooltip>
 
+            <Tooltip content={heatmapMode ? 'Hide heatmap' : 'Show table fill heatmap'}>
+              <Button
+                variant={heatmapMode ? 'secondary' : 'ghost'}
+                size="sm"
+                onClick={() => setHeatmapMode(!heatmapMode)}
+                className={heatmapMode ? 'bg-teal-100 text-teal-700 hover:bg-teal-200' : ''}
+              >
+                <Flame size={14} />
+                <span className="ml-1 hidden sm:inline">Heatmap</span>
+              </Button>
+            </Tooltip>
+
             <div className="w-px h-5 bg-slate-200 mx-1" />
 
             <Tooltip content={showConstraints ? 'Hide constraints' : 'Show constraints'}>
@@ -551,17 +683,44 @@ export function SeatingStep() {
               </Button>
             </Tooltip>
 
-            {violations.length > 0 && (
-              <button
-                onClick={() => setShowViolationPanel((v) => !v)}
-                className="cursor-pointer"
-              >
-                <Badge color="#DC2626" bgColor="#FEE2E2">
-                  <AlertTriangle size={10} className="mr-1" />
-                  {violations.length} violation{violations.length !== 1 ? 's' : ''}
-                </Badge>
-              </button>
-            )}
+            {violations.length > 0 && (() => {
+              const errorCount = violations.filter((v) => v.severity !== 'warning').length;
+              const warningCount = violations.filter((v) => v.severity === 'warning').length;
+              return (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setShowViolationPanel((v) => !v)}
+                    className="flex items-center gap-1.5 cursor-pointer"
+                  >
+                    {errorCount > 0 && (
+                      <Badge color="#DC2626" bgColor="#FEE2E2">
+                        <AlertTriangle size={10} className="mr-1" />
+                        {errorCount} error{errorCount !== 1 ? 's' : ''}
+                      </Badge>
+                    )}
+                    {warningCount > 0 && (
+                      <Badge color="#D97706" bgColor="#FEF3C7">
+                        <AlertTriangle size={10} className="mr-1" />
+                        {warningCount} warning{warningCount !== 1 ? 's' : ''}
+                      </Badge>
+                    )}
+                  </button>
+                  {errorCount > 0 && (
+                    <Tooltip content="Fix conflicts one by one">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setShowConflictWizard(true)}
+                        className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                      >
+                        <Wand2 size={14} />
+                        <span className="ml-1 hidden sm:inline">Fix</span>
+                      </Button>
+                    </Tooltip>
+                  )}
+                </div>
+              );
+            })()}
 
             <div className="w-px h-5 bg-slate-200 mx-1" />
 
@@ -574,6 +733,7 @@ export function SeatingStep() {
               >
                 <Wand2 size={14} />
                 <span className="ml-1 hidden sm:inline">Auto-fill</span>
+                {!canAccess('auto-assign') && <ProBadge />}
               </Button>
             </Tooltip>
             {seatedCount > 0 && (
@@ -631,6 +791,7 @@ export function SeatingStep() {
                 }}
                 showConstraints={showConstraints}
                 draggedGuestId={draggedGuestId}
+                heatmapMode={heatmapMode}
               />
               {showViolationPanel && violations.length > 0 && (
                 <ViolationDetailsPanel
@@ -645,6 +806,36 @@ export function SeatingStep() {
             </div>
           )}
         </div>
+
+        {/* Bulk assign confirmation card */}
+        {pendingBulkAssign && (() => {
+          const table = venue.tables.find((t) => t.id === pendingBulkAssign.tableId);
+          const seatsLeft = table ? table.capacity - table.assignedGuestIds.length : 0;
+          const overflow = selectedGuestIds.length - seatsLeft;
+          return (
+            <div className="fixed bottom-16 left-1/2 -translate-x-1/2 z-50 bg-white rounded-xl shadow-lg border border-slate-200 px-4 py-3 min-w-[260px]">
+              <p className="text-sm font-medium text-slate-900 mb-1">Confirm assignment</p>
+              <p className="text-xs text-slate-500 mb-1">
+                Assign {selectedGuestIds.length} guest{selectedGuestIds.length !== 1 ? 's' : ''} to {table?.label ?? 'table'}
+                {' '}({seatsLeft} seat{seatsLeft !== 1 ? 's' : ''} remaining)
+              </p>
+              {overflow > 0 && (
+                <p className="text-xs text-red-600 mb-2 flex items-center gap-1">
+                  <AlertTriangle size={12} className="flex-shrink-0" />
+                  {overflow} more guest{overflow !== 1 ? 's' : ''} than available seats
+                </p>
+              )}
+              <div className="flex gap-2 mt-2">
+                <Button variant="primary" size="sm" onClick={handleBulkAssign} className="flex-1">
+                  Confirm Assign
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setPendingBulkAssign(null)} className="flex-1">
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Bottom Action Bar (when guests selected) */}
         {selectedGuestIds.length > 0 && (
@@ -677,6 +868,29 @@ export function SeatingStep() {
                     <span className="ml-1 hidden sm:inline">Apart</span>
                   </Button>
                 </Tooltip>
+                <Tooltip content="Prefer to sit near each other">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleAddConstraint('prefer-near')}
+                  >
+                    <Heart size={14} className="text-amber-500" />
+                    <span className="ml-1 hidden sm:inline">Prefer Near</span>
+                  </Button>
+                </Tooltip>
+
+                {selectedGuestIds.every(id => guestMap.get(id)?.tableId) && (
+                  <Tooltip content="Swap their seats">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleSwapSeats}
+                    >
+                      <ArrowLeftRight size={14} className="text-blue-600" />
+                      <span className="ml-1 hidden sm:inline">Swap Seats</span>
+                    </Button>
+                  </Tooltip>
+                )}
 
                 <div className="w-px h-5 bg-slate-200 shrink-0" />
               </>
@@ -695,25 +909,37 @@ export function SeatingStep() {
               </Button>
 
               {showBulkSelect && (
-                <div className="absolute bottom-full mb-2 left-0 bg-white rounded-lg shadow-lg border border-slate-200 py-1 min-w-[180px] max-h-48 overflow-y-auto">
+                <div className="absolute bottom-full mb-2 left-0 bg-white rounded-lg shadow-lg border border-slate-200 py-1 min-w-[220px] max-h-48 overflow-y-auto">
                   {venue.tables.map((table) => {
                     const seatsLeft = table.capacity - table.assignedGuestIds.length;
+                    const usageRatio = table.capacity > 0 ? table.assignedGuestIds.length / table.capacity : 1;
+                    const capacityColor = seatsLeft <= 0
+                      ? 'text-red-600 font-medium'
+                      : usageRatio > 0.8
+                      ? 'text-amber-600 font-medium'
+                      : 'text-green-600';
+                    const overflow = selectedGuestIds.length - seatsLeft;
                     return (
                       <button
                         key={table.id}
                         onClick={() => {
-                          setBulkTableId(table.id);
-                          bulkAssignToTable(selectedGuestIds, table.id);
-                          setSelectedGuestIds([]);
+                          setPendingBulkAssign({ tableId: table.id });
                           setShowBulkSelect(false);
                         }}
                         disabled={seatsLeft <= 0}
-                        className="w-full px-3 py-1.5 text-left text-sm hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-between cursor-pointer"
+                        className="w-full px-3 py-1.5 text-left text-sm hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                       >
-                        <span className="text-slate-700">{table.label}</span>
-                        <span className="text-xs text-slate-400">
-                          {seatsLeft} seat{seatsLeft !== 1 ? 's' : ''} left
-                        </span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-700">{table.label}</span>
+                          <span className={`text-xs ${capacityColor}`}>
+                            {seatsLeft} seat{seatsLeft !== 1 ? 's' : ''} left
+                          </span>
+                        </div>
+                        {overflow > 0 && seatsLeft > 0 && (
+                          <p className="text-[11px] text-red-500 mt-0.5">
+                            {overflow} more guest{overflow !== 1 ? 's' : ''} than available seats
+                          </p>
+                        )}
                       </button>
                     );
                   })}
@@ -743,6 +969,16 @@ export function SeatingStep() {
         >
           {guests.find((g) => g.id === touchDragGuest.guestId)?.name || 'Guest'}
         </div>
+      )}
+      <UpgradeDialog open={upgradeOpen} onOpenChange={setUpgradeOpen} feature={upgradeFeature} />
+      {showConflictWizard && (
+        <ConflictWizard
+          violations={violations}
+          constraints={constraints}
+          guests={guests}
+          tables={venue.tables}
+          onClose={() => setShowConflictWizard(false)}
+        />
       )}
     </TooltipProvider>
   );

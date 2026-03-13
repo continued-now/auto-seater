@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { ChevronUp, UtensilsCrossed } from 'lucide-react';
+import { ChevronUp, UtensilsCrossed, ChevronDown, AlertTriangle } from 'lucide-react';
 import { dietaryTagColors } from '@/lib/colour-palette';
 import type { Guest, DietaryTag } from '@/types/guest';
 import type { Table } from '@/types/venue';
@@ -32,6 +32,7 @@ interface SeatingStatsPanelProps {
 
 export function SeatingStatsPanel({ guests, tables }: SeatingStatsPanelProps) {
   const [expanded, setExpanded] = useState(false);
+  const [expandedTableId, setExpandedTableId] = useState<string | null>(null);
 
   const totalSeats = useMemo(
     () => tables.reduce((sum, t) => sum + t.capacity, 0),
@@ -57,6 +58,38 @@ export function SeatingStatsPanel({ guests, tables }: SeatingStatsPanelProps) {
     () => guests.filter((g) => g.dietaryTags.length > 0).length,
     [guests]
   );
+
+  const tablesDietary = useMemo(() => {
+    const map = new Map<string, DietaryTag[]>();
+    for (const g of guests) {
+      if (!g.tableId || g.dietaryTags.length === 0) continue;
+      if (!map.has(g.tableId)) map.set(g.tableId, []);
+      map.get(g.tableId)!.push(...g.dietaryTags);
+    }
+    return map;
+  }, [guests]);
+
+  // Compute tables where >50% of guests share the same dietary tag
+  const dietaryImbalances = useMemo(() => {
+    const warnings: { tableId: string; tableLabel: string; tag: DietaryTag; tagCount: number; guestCount: number }[] = [];
+    for (const table of tables) {
+      const guestCount = table.assignedGuestIds.length;
+      if (guestCount < 2) continue; // need at least 2 guests for a meaningful ratio
+      const tags = tablesDietary.get(table.id);
+      if (!tags || tags.length === 0) continue;
+      // Count occurrences of each tag at this table
+      const counts = new Map<DietaryTag, number>();
+      for (const tag of tags) {
+        counts.set(tag, (counts.get(tag) ?? 0) + 1);
+      }
+      for (const [tag, count] of counts) {
+        if (count / guestCount > 0.5) {
+          warnings.push({ tableId: table.id, tableLabel: table.label, tag, tagCount: count, guestCount });
+        }
+      }
+    }
+    return warnings;
+  }, [tables, tablesDietary]);
 
   if (tables.length === 0 && guests.length === 0) return null;
 
@@ -151,24 +184,92 @@ export function SeatingStatsPanel({ guests, tables }: SeatingStatsPanelProps) {
                     : table.assignedGuestIds.length > 0
                     ? '#16A34A'
                     : '#cbd5e1';
+                const dietaryTags = tablesDietary.get(table.id);
+                const hasDietary = dietaryTags && dietaryTags.length > 0;
+                const isExpanded = expandedTableId === table.id;
+
+                // Count unique tags for this table
+                const tagCounts = hasDietary
+                  ? DIETARY_OPTIONS.map((tag) => ({ tag, count: dietaryTags.filter((t) => t === tag).length })).filter((d) => d.count > 0)
+                  : [];
+
                 return (
-                  <div key={table.id} className="flex items-center gap-2">
-                    <span className="text-[10px] text-slate-600 w-16 truncate shrink-0">{table.label}</span>
-                    <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-300"
-                        style={{
-                          width: `${Math.min(fill * 100, 100)}%`,
-                          backgroundColor: fillColor,
-                        }}
-                      />
+                  <div key={table.id}>
+                    <div
+                      className={`flex items-center gap-2 ${hasDietary ? 'cursor-pointer' : ''}`}
+                      onClick={() => hasDietary && setExpandedTableId(isExpanded ? null : table.id)}
+                    >
+                      <span className="text-[10px] text-slate-600 w-16 truncate shrink-0">{table.label}</span>
+                      <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-300"
+                          style={{
+                            width: `${Math.min(fill * 100, 100)}%`,
+                            backgroundColor: fillColor,
+                          }}
+                        />
+                      </div>
+                      <span className="text-[10px] text-slate-500 tabular-nums w-8 text-right shrink-0">
+                        {table.assignedGuestIds.length}/{table.capacity}
+                      </span>
+                      {hasDietary ? (
+                        isExpanded
+                          ? <ChevronDown size={10} className="text-slate-400 shrink-0" />
+                          : <UtensilsCrossed size={10} className="text-amber-500 shrink-0" />
+                      ) : (
+                        <span className="w-[10px] shrink-0" />
+                      )}
                     </div>
-                    <span className="text-[10px] text-slate-500 tabular-nums w-8 text-right shrink-0">
-                      {table.assignedGuestIds.length}/{table.capacity}
-                    </span>
+                    {isExpanded && tagCounts.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1 ml-[72px]">
+                        {tagCounts.map(({ tag, count }) => (
+                          <span
+                            key={tag}
+                            className="text-[9px] font-medium rounded px-1 py-0.5"
+                            style={{
+                              backgroundColor: (dietaryTagColors[tag] ?? '#64748B') + '18',
+                              color: dietaryTagColors[tag] ?? '#64748B',
+                            }}
+                          >
+                            {formatTag(tag)} {count}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {/* Section — Dietary Distribution (imbalance warnings) */}
+        {dietaryImbalances.length > 0 && (
+          <div>
+            <div className="flex items-center gap-1 mb-1.5">
+              <AlertTriangle size={10} className="text-amber-500" />
+              <span className="text-[11px] font-medium text-slate-500">Dietary Distribution</span>
+            </div>
+            <div className="space-y-1 max-h-36 overflow-y-auto">
+              {dietaryImbalances.map(({ tableId, tableLabel, tag, tagCount, guestCount }) => (
+                <div
+                  key={`${tableId}-${tag}`}
+                  className="flex items-center gap-2 rounded-md px-2 py-1"
+                  style={{ backgroundColor: '#FEF3C7' }}
+                >
+                  <AlertTriangle size={10} className="text-amber-600 shrink-0" />
+                  <span className="text-[10px] text-slate-600 w-16 truncate shrink-0">{tableLabel}</span>
+                  <span
+                    className="text-[10px] font-medium rounded px-1 py-0.5"
+                    style={{
+                      backgroundColor: (dietaryTagColors[tag] ?? '#64748B') + '18',
+                      color: dietaryTagColors[tag] ?? '#64748B',
+                    }}
+                  >
+                    {tagCount}/{guestCount} {formatTag(tag)}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         )}

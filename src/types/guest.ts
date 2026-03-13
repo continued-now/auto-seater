@@ -33,6 +33,8 @@ export interface Guest {
   notes: string;
   checkedInAt: number | null;
   checkedInBy: string | null;
+  isPlusOne?: boolean;
+  plusOneOf?: string | null;
   createdAt: number;
   updatedAt: number;
 }
