@@ -40,8 +40,8 @@ export async function POST(request: Request) {
           quantity: 1,
         },
       ],
-      success_url: `${origin}?purchase_success={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${origin}?purchase_cancelled=true`,
+      success_url: `${origin}/app?purchase_success={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${origin}/app?purchase_cancelled=true`,
       metadata: {
         product: 'autoseater-pro',
       },

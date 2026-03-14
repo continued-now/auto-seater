@@ -4,8 +4,10 @@ import { useSeatingStore } from '@/stores/useSeatingStore';
 
 export function DemoInteractionBlocker() {
   const isDemoMode = useSeatingStore((s) => s.isDemoMode);
+  const isDemoMinimized = useSeatingStore((s) => s.isDemoMinimized);
 
-  if (!isDemoMode) return null;
+  // Don't block interactions when minimized — let users explore
+  if (!isDemoMode || isDemoMinimized) return null;
 
   return (
     <div

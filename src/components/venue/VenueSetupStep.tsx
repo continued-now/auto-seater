@@ -43,6 +43,7 @@ import {
   MoveVertical,
   X,
   ListOrdered,
+  DollarSign,
 } from 'lucide-react';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { Button } from '@/components/ui/Button';
@@ -167,6 +168,10 @@ export function VenueSetupStep() {
   // Renumber tables state
   const [renumberPrefix, setRenumberPrefix] = useState<'Table ' | 'T' | 'custom'>('Table ');
   const [renumberCustomPrefix, setRenumberCustomPrefix] = useState('');
+
+  // Bulk seat state
+  const [bulkSeatCount, setBulkSeatCount] = useState(8);
+  const [bulkSeatFilter, setBulkSeatFilter] = useState<'all' | TableShape>('all');
 
   const pxPerUnit = venue.unit === 'ft' ? 15 : 30;
   const roomRects = useMemo(() => getAllRoomRects(venue, pxPerUnit), [venue, pxPerUnit]);
@@ -363,6 +368,30 @@ export function VenueSetupStep() {
     toast.success(`Renumbered ${sorted.length} table${sorted.length !== 1 ? 's' : ''}`);
   }, [venue.tables, renumberPrefix, renumberCustomPrefix, updateTable]);
 
+  const handleBulkSetSeats = useCallback(() => {
+    const matching = venue.tables.filter(
+      (t) => bulkSeatFilter === 'all' || t.shape === bulkSeatFilter
+    );
+    if (matching.length === 0) {
+      toast.error('No matching tables found');
+      return;
+    }
+    matching.forEach((t) => updateTable(t.id, { capacity: bulkSeatCount }));
+    toast.success(`Set ${bulkSeatCount} seats on ${matching.length} table${matching.length !== 1 ? 's' : ''}`);
+  }, [venue.tables, bulkSeatFilter, bulkSeatCount, updateTable]);
+
+  // Guest count for capacity/pricing
+  const guests = useSeatingStore((s) => s.guests);
+  const confirmedGuestCount = useMemo(
+    () => guests.filter((g) => g.rsvpStatus === 'confirmed' || g.rsvpStatus === 'tentative').length,
+    [guests]
+  );
+
+  // Capacity computations
+  const totalSeated = useMemo(() => venue.tables.reduce((sum, t) => sum + t.capacity, 0), [venue.tables]);
+  const totalStanding = useMemo(() => venue.tables.reduce((sum, t) => sum + (t.standingCapacity ?? 0), 0), [venue.tables]);
+  const totalCapacity = totalSeated + totalStanding;
+
   // Compute wall length for display
   const wallLength = selectedWall
     ? Math.sqrt(
@@ -521,58 +550,106 @@ export function VenueSetupStep() {
             </div>
           </SidebarSection>
 
-          {/* Renumber Tables */}
+          {/* Table Tools — Bulk seats + Renumber */}
           {venue.tables.length > 0 && (
-            <SidebarSection title="Renumber Tables">
-              <div className="space-y-2">
-                <div className="flex gap-1">
-                  <button
-                    onClick={() => setRenumberPrefix('Table ')}
-                    className={`flex-1 px-2 py-1 rounded-md border text-[10px] font-medium transition-colors cursor-pointer ${
-                      renumberPrefix === 'Table '
-                        ? 'border-blue-400 bg-blue-50 text-blue-700'
-                        : 'border-border hover:border-blue-300 hover:bg-blue-50 text-slate-600'
-                    }`}
-                  >
-                    Table 1
-                  </button>
-                  <button
-                    onClick={() => setRenumberPrefix('T')}
-                    className={`flex-1 px-2 py-1 rounded-md border text-[10px] font-medium transition-colors cursor-pointer ${
-                      renumberPrefix === 'T'
-                        ? 'border-blue-400 bg-blue-50 text-blue-700'
-                        : 'border-border hover:border-blue-300 hover:bg-blue-50 text-slate-600'
-                    }`}
-                  >
-                    T1
-                  </button>
-                  <button
-                    onClick={() => setRenumberPrefix('custom')}
-                    className={`flex-1 px-2 py-1 rounded-md border text-[10px] font-medium transition-colors cursor-pointer ${
-                      renumberPrefix === 'custom'
-                        ? 'border-blue-400 bg-blue-50 text-blue-700'
-                        : 'border-border hover:border-blue-300 hover:bg-blue-50 text-slate-600'
-                    }`}
-                  >
-                    Custom
-                  </button>
+            <SidebarSection title="Table Tools">
+              <div className="space-y-3">
+                {/* Bulk Set Seats */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">Set seats on</label>
+                  <div className="flex gap-1 flex-wrap">
+                    {([
+                      { value: 'all' as const, label: 'All' },
+                      { value: 'round' as const, label: 'Round' },
+                      { value: 'rectangular' as const, label: 'Rect' },
+                      { value: 'square' as const, label: 'Square' },
+                      { value: 'head' as const, label: 'Head' },
+                    ] as const).map(({ value, label }) => (
+                      <button
+                        key={value}
+                        onClick={() => setBulkSeatFilter(value)}
+                        className={`px-2 py-0.5 rounded-md border text-[10px] font-medium transition-colors cursor-pointer ${
+                          bulkSeatFilter === value
+                            ? 'border-blue-400 bg-blue-50 text-blue-700'
+                            : 'border-border hover:border-blue-300 hover:bg-blue-50 text-slate-600'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex gap-1.5">
+                    <Input
+                      type="number"
+                      min={0}
+                      value={bulkSeatCount}
+                      onChange={(e) => setBulkSeatCount(Math.max(0, Number(e.target.value) || 0))}
+                      label="Seats per table"
+                      className="flex-1"
+                    />
+                    <div className="pt-5">
+                      <Button variant="primary" size="sm" onClick={handleBulkSetSeats}>
+                        Apply
+                      </Button>
+                    </div>
+                  </div>
                 </div>
-                {renumberPrefix === 'custom' && (
-                  <Input
-                    placeholder="Prefix, e.g. Tbl "
-                    value={renumberCustomPrefix}
-                    onChange={(e) => setRenumberCustomPrefix(e.target.value)}
-                    className="text-xs"
-                  />
-                )}
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="w-full"
-                  onClick={handleRenumberTables}
-                >
-                  <ListOrdered size={14} /> Renumber ({venue.tables.length})
-                </Button>
+
+                {/* Divider */}
+                <div className="border-t border-border" />
+
+                {/* Renumber */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">Renumber</label>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => setRenumberPrefix('Table ')}
+                      className={`flex-1 px-2 py-1 rounded-md border text-[10px] font-medium transition-colors cursor-pointer ${
+                        renumberPrefix === 'Table '
+                          ? 'border-blue-400 bg-blue-50 text-blue-700'
+                          : 'border-border hover:border-blue-300 hover:bg-blue-50 text-slate-600'
+                      }`}
+                    >
+                      Table 1
+                    </button>
+                    <button
+                      onClick={() => setRenumberPrefix('T')}
+                      className={`flex-1 px-2 py-1 rounded-md border text-[10px] font-medium transition-colors cursor-pointer ${
+                        renumberPrefix === 'T'
+                          ? 'border-blue-400 bg-blue-50 text-blue-700'
+                          : 'border-border hover:border-blue-300 hover:bg-blue-50 text-slate-600'
+                      }`}
+                    >
+                      T1
+                    </button>
+                    <button
+                      onClick={() => setRenumberPrefix('custom')}
+                      className={`flex-1 px-2 py-1 rounded-md border text-[10px] font-medium transition-colors cursor-pointer ${
+                        renumberPrefix === 'custom'
+                          ? 'border-blue-400 bg-blue-50 text-blue-700'
+                          : 'border-border hover:border-blue-300 hover:bg-blue-50 text-slate-600'
+                      }`}
+                    >
+                      Custom
+                    </button>
+                  </div>
+                  {renumberPrefix === 'custom' && (
+                    <Input
+                      placeholder="Prefix, e.g. Tbl "
+                      value={renumberCustomPrefix}
+                      onChange={(e) => setRenumberCustomPrefix(e.target.value)}
+                      className="text-xs"
+                    />
+                  )}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="w-full"
+                    onClick={handleRenumberTables}
+                  >
+                    <ListOrdered size={14} /> Renumber ({venue.tables.length})
+                  </Button>
+                </div>
               </div>
             </SidebarSection>
           )}
@@ -697,6 +774,201 @@ export function VenueSetupStep() {
                 onChange={(e) => updateVenueConfig({ gridSize: Math.max(0, Number(e.target.value) || 0) })}
                 min={0}
               />
+            </div>
+          </SidebarSection>
+
+          {/* Capacity Dashboard */}
+          <SidebarSection title="Capacity">
+            <div className="space-y-2">
+              <div className="grid grid-cols-3 gap-1.5 text-center">
+                <div className="bg-slate-50 rounded-md p-1.5">
+                  <div className="text-sm font-semibold text-slate-700">{totalSeated}</div>
+                  <div className="text-[10px] text-slate-400">Seated</div>
+                </div>
+                <div className="bg-slate-50 rounded-md p-1.5">
+                  <div className="text-sm font-semibold text-slate-700">{totalStanding}</div>
+                  <div className="text-[10px] text-slate-400">Standing</div>
+                </div>
+                <div className="bg-slate-50 rounded-md p-1.5">
+                  <div className="text-sm font-semibold text-slate-700">{totalCapacity}</div>
+                  <div className="text-[10px] text-slate-400">Total</div>
+                </div>
+              </div>
+
+              {confirmedGuestCount > 0 && (
+                <div className="text-xs text-slate-500 flex items-center gap-1">
+                  <Users size={12} />
+                  {confirmedGuestCount} confirmed guest{confirmedGuestCount !== 1 ? 's' : ''} / {totalCapacity} capacity
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <Input
+                  type="number"
+                  min={0}
+                  value={venue.capacitySettings?.comfortable ?? 0}
+                  onChange={(e) =>
+                    updateVenueConfig({
+                      capacitySettings: {
+                        comfortable: Math.max(0, Number(e.target.value) || 0),
+                        maximum: venue.capacitySettings?.maximum ?? 0,
+                      },
+                    })
+                  }
+                  label="Comfortable"
+                />
+                <Input
+                  type="number"
+                  min={0}
+                  value={venue.capacitySettings?.maximum ?? 0}
+                  onChange={(e) =>
+                    updateVenueConfig({
+                      capacitySettings: {
+                        comfortable: venue.capacitySettings?.comfortable ?? 0,
+                        maximum: Math.max(0, Number(e.target.value) || 0),
+                      },
+                    })
+                  }
+                  label="Maximum"
+                />
+              </div>
+
+              {/* Status indicator */}
+              {(() => {
+                const comfortable = venue.capacitySettings?.comfortable ?? 0;
+                const maximum = venue.capacitySettings?.maximum ?? 0;
+                if (comfortable === 0 && maximum === 0) return null;
+                let status: 'comfortable' | 'near' | 'over' = 'comfortable';
+                let label = 'Comfortable';
+                let color = 'bg-emerald-100 text-emerald-700';
+                if (maximum > 0 && totalCapacity > maximum) {
+                  status = 'over';
+                  label = 'Over capacity';
+                  color = 'bg-red-100 text-red-700';
+                } else if (comfortable > 0 && totalCapacity > comfortable) {
+                  status = 'near';
+                  label = 'Near capacity';
+                  color = 'bg-amber-100 text-amber-700';
+                }
+                void status;
+                return (
+                  <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ${color}`}>
+                    {label}
+                  </span>
+                );
+              })()}
+            </div>
+          </SidebarSection>
+
+          {/* Venue Pricing */}
+          <SidebarSection title="Venue Pricing">
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <Checkbox
+                  checked={venue.pricing?.enabled ?? false}
+                  onCheckedChange={(checked) =>
+                    updateVenueConfig({
+                      pricing: {
+                        enabled: !!checked,
+                        baseCost: venue.pricing?.baseCost ?? 0,
+                        includedGuests: venue.pricing?.includedGuests ?? 0,
+                        perPersonRate: venue.pricing?.perPersonRate ?? 0,
+                        currency: venue.pricing?.currency ?? 'USD',
+                      },
+                    })
+                  }
+                />
+                <DollarSign size={14} className="text-slate-500" />
+                Track venue costs
+              </label>
+
+              {venue.pricing?.enabled && (
+                <div className="space-y-2">
+                  <div>
+                    <label className="text-xs text-slate-500 block mb-1">Currency</label>
+                    <select
+                      value={venue.pricing.currency}
+                      onChange={(e) =>
+                        updateVenueConfig({
+                          pricing: { ...venue.pricing!, currency: e.target.value },
+                        })
+                      }
+                      className="w-full border border-border rounded-md px-2 py-1.5 text-sm"
+                    >
+                      {['USD', 'GBP', 'EUR', 'AUD', 'CAD'].map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={venue.pricing.baseCost}
+                    onChange={(e) =>
+                      updateVenueConfig({
+                        pricing: { ...venue.pricing!, baseCost: Math.max(0, Number(e.target.value) || 0) },
+                      })
+                    }
+                    label="Base cost"
+                  />
+                  <Input
+                    type="number"
+                    min={0}
+                    value={venue.pricing.includedGuests}
+                    onChange={(e) =>
+                      updateVenueConfig({
+                        pricing: { ...venue.pricing!, includedGuests: Math.max(0, Number(e.target.value) || 0) },
+                      })
+                    }
+                    label="Guests included"
+                  />
+                  <Input
+                    type="number"
+                    min={0}
+                    value={venue.pricing.perPersonRate}
+                    onChange={(e) =>
+                      updateVenueConfig({
+                        pricing: { ...venue.pricing!, perPersonRate: Math.max(0, Number(e.target.value) || 0) },
+                      })
+                    }
+                    label={
+                      venue.pricing.includedGuests > 0
+                        ? `Per person over ${venue.pricing.includedGuests}`
+                        : 'Per person'
+                    }
+                  />
+
+                  {/* Cost Summary */}
+                  {(() => {
+                    const p = venue.pricing!;
+                    const additionalGuests = Math.max(0, confirmedGuestCount - p.includedGuests);
+                    const additionalCost = additionalGuests * p.perPersonRate;
+                    const estimatedTotal = p.baseCost + additionalCost;
+                    const sym = { USD: '$', GBP: '\u00A3', EUR: '\u20AC', AUD: 'A$', CAD: 'C$' }[p.currency] ?? p.currency;
+                    return (
+                      <div className="bg-slate-50 rounded-lg p-2.5 space-y-1 text-xs">
+                        <div className="flex justify-between text-slate-500">
+                          <span>Base cost</span>
+                          <span>{sym}{p.baseCost.toLocaleString()}</span>
+                        </div>
+                        {additionalGuests > 0 && (
+                          <div className="flex justify-between text-slate-500">
+                            <span>{additionalGuests} extra @ {sym}{p.perPersonRate}</span>
+                            <span>{sym}{additionalCost.toLocaleString()}</span>
+                          </div>
+                        )}
+                        <div className="border-t border-border pt-1 flex justify-between font-semibold text-slate-700">
+                          <span>Estimated total</span>
+                          <span>{sym}{estimatedTotal.toLocaleString()}</span>
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          {confirmedGuestCount} confirmed guest{confirmedGuestCount !== 1 ? 's' : ''}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
           </SidebarSection>
 
@@ -882,6 +1154,9 @@ export function VenueSetupStep() {
               {venue.walls.length > 0 && (
                 <> &middot; {venue.walls.length} wall{venue.walls.length !== 1 ? 's' : ''}</>
               )}
+              {totalStanding > 0 && (
+                <> &middot; {totalStanding} standing</>
+              )}
             </span>
 
             <span className="text-xs text-slate-400 ml-auto shrink-0">
@@ -942,6 +1217,15 @@ export function VenueSetupStep() {
                   value={selectedTable.capacity}
                   onChange={(e) =>
                     updateTable(selectedTable.id, { capacity: Math.max(0, Number(e.target.value) || 0) })
+                  }
+                />
+                <Input
+                  label="Standing spots"
+                  type="number"
+                  min={0}
+                  value={selectedTable.standingCapacity ?? 0}
+                  onChange={(e) =>
+                    updateTable(selectedTable.id, { standingCapacity: Math.max(0, Number(e.target.value) || 0) })
                   }
                 />
                 <div>
@@ -1070,6 +1354,9 @@ export function VenueSetupStep() {
                 <div className="text-xs text-slate-400">
                   Shape: {selectedTable.shape} &middot; Assigned:{' '}
                   {selectedTable.assignedGuestIds.length}/{selectedTable.capacity}
+                  {(selectedTable.standingCapacity ?? 0) > 0 && (
+                    <> &middot; Standing: {selectedTable.standingCapacity}</>
+                  )}
                 </div>
                 <Button
                   variant="danger"

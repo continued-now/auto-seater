@@ -19,8 +19,23 @@
   --font-mono: var(--font-geist-mono);
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 * {
   box-sizing: border-box;
+}
+
+/* Hero floor plan seat fade-in */
+@keyframes seat-appear {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+.seat-appear {
+  opacity: 0;
+  animation: seat-appear 1.5s ease-in-out 2s forwards;
 }
 
 body {

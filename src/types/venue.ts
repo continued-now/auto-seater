@@ -63,6 +63,7 @@ export interface Table {
   seatingSide?: SeatingSide;  // default: 'both' — rectangular/square only
   endSeats?: boolean;          // default: true — whether short ends have seats
   note?: string;               // optional caterer/planner note for this table
+  standingCapacity?: number;   // standing spots (no seat circles, contributes to venue totals)
 }
 
 export interface Fixture {
@@ -105,6 +106,17 @@ export interface VenueConfig {
   guides: UserGuide[];
   blueprintMode: boolean;
   rooms: Room[];
+  capacitySettings?: {
+    comfortable: number;  // user-set "comfortable" threshold
+    maximum: number;      // user-set "max" threshold
+  };
+  pricing?: {
+    enabled: boolean;
+    baseCost: number;         // flat venue fee
+    includedGuests: number;   // guests included in base cost (0 = none)
+    perPersonRate: number;    // cost per additional person
+    currency: string;         // e.g. 'USD', 'GBP', 'EUR'
+  };
 }
 
 export interface VenueTemplate {

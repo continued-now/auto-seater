@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect, useSyncExternalStore } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { Undo2, Redo2, Play, X, FolderOpen, Calendar, Zap, ChevronDown, Plus, Trash2 } from 'lucide-react';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { Button } from './ui/Button';
@@ -37,6 +37,15 @@ export function Header() {
   const deleteEventAction = useSeatingStore((s) => s.deleteEvent);
 
   const userTier = useSeatingStore((s) => s.userTier);
+  const currentStep = useSeatingStore((s) => s.currentStep);
+
+  const upgradeLabel = useMemo(() => {
+    if (currentStep === 'guests' && guests.length >= 40) return 'Upgrade — unlimited guests';
+    if (currentStep === 'venue') return 'Upgrade — AI floor plans';
+    if (currentStep === 'seating') return 'Upgrade — auto-assign';
+    return 'Upgrade to Pro';
+  }, [currentStep, guests.length]);
+
   const [showProjectMenu, setShowProjectMenu] = useState(false);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [showEventMenu, setShowEventMenu] = useState(false);
@@ -167,7 +176,7 @@ export function Header() {
             onClick={() => setUpgradeOpen(true)}
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 text-xs font-semibold text-amber-700 border border-amber-200 shrink-0 hover:bg-amber-100 transition-colors cursor-pointer"
           >
-            <Zap size={10} /> Upgrade
+            <Zap size={10} /> {upgradeLabel}
           </button>
         )}
         {!isDemoMode && (

@@ -31,6 +31,7 @@ import { useSeatingStore } from '@/stores/useSeatingStore';
 import { useCSVImport } from '@/hooks/useCSVImport';
 import { useFeatureGate } from '@/hooks/useFeatureGate';
 import { UpgradeDialog } from '@/components/ui/UpgradeDialog';
+import { GuestLimitModal } from '@/components/ui/GuestLimitModal';
 import { FREE_GUEST_LIMIT } from '@/lib/purchase';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -1340,6 +1341,7 @@ export function GuestListStep() {
   const [addGuestsDialogOpen, setAddGuestsDialogOpen] = useState(false);
   const [detailGuestId, setDetailGuestId] = useState<string | null>(null);
   const { requirePro, upgradeOpen, setUpgradeOpen, upgradeFeature } = useFeatureGate();
+  const [guestLimitModalOpen, setGuestLimitModalOpen] = useState(false);
   const [showHouseholds, setShowHouseholds] = useState(false);
   const [newHouseholdName, setNewHouseholdName] = useState('');
   const [editingHouseholdId, setEditingHouseholdId] = useState<string | null>(null);
@@ -1480,7 +1482,8 @@ export function GuestListStep() {
             </Button>
           </div>
         </div>
-        <AddGuestsDialog open={addGuestsDialogOpen} onOpenChange={setAddGuestsDialogOpen} onGuestLimitHit={() => requirePro('unlimited-guests', 'Unlimited guests')} />
+        <AddGuestsDialog open={addGuestsDialogOpen} onOpenChange={setAddGuestsDialogOpen} onGuestLimitHit={() => setGuestLimitModalOpen(true)} />
+        <GuestLimitModal open={guestLimitModalOpen} onOpenChange={setGuestLimitModalOpen} />
         <UpgradeDialog open={upgradeOpen} onOpenChange={setUpgradeOpen} feature={upgradeFeature} />
       </div>
     );
@@ -1908,7 +1911,8 @@ export function GuestListStep() {
       </div>
 
       {/* Dialog */}
-      <AddGuestsDialog open={addGuestsDialogOpen} onOpenChange={setAddGuestsDialogOpen} onGuestLimitHit={() => requirePro('unlimited-guests', 'Unlimited guests')} />
+      <AddGuestsDialog open={addGuestsDialogOpen} onOpenChange={setAddGuestsDialogOpen} onGuestLimitHit={() => setGuestLimitModalOpen(true)} />
+      <GuestLimitModal open={guestLimitModalOpen} onOpenChange={setGuestLimitModalOpen} />
 
       {/* Detail Panel */}
       {detailGuest && (

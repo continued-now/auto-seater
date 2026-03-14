@@ -4,6 +4,7 @@ import { useState, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { useFeatureGate } from '@/hooks/useFeatureGate';
+import { usePurchase } from '@/hooks/usePurchase';
 import { UpgradeDialog } from '@/components/ui/UpgradeDialog';
 import { ProBadge } from '@/components/ui/ProBadge';
 import { Button } from '@/components/ui/Button';
@@ -26,6 +27,7 @@ export function ExportPanel({ stageRef }: ExportPanelProps) {
   const guests = useSeatingStore((s) => s.guests);
   const venue = useSeatingStore((s) => s.venue);
   const { canAccess, requirePro, upgradeOpen, setUpgradeOpen, upgradeFeature } = useFeatureGate();
+  const { startCheckout } = usePurchase();
 
   const [showDropdown, setShowDropdown] = useState(false);
   const [dialogType, setDialogType] = useState<ExportType | null>(null);
@@ -66,7 +68,17 @@ export function ExportPanel({ stageRef }: ExportPanelProps) {
         title: fpTitle,
         showStats: fpShowStats,
       }, venue, guests, showWatermark);
-      toast.success('Floor plan exported');
+      if (showWatermark) {
+        toast('Your export includes a watermark', {
+          action: {
+            label: 'Remove watermark — $14.99',
+            onClick: () => startCheckout(),
+          },
+          duration: 8000,
+        });
+      } else {
+        toast.success('Floor plan exported');
+      }
     } catch (err) {
       toast.error('Export failed');
       throw err;
@@ -74,7 +86,7 @@ export function ExportPanel({ stageRef }: ExportPanelProps) {
       setExporting(false);
       setDialogType(null);
     }
-  }, [stageRef, fpPaper, fpOrientation, fpTitle, fpShowStats, venue, guests, canAccess]);
+  }, [stageRef, fpPaper, fpOrientation, fpTitle, fpShowStats, venue, guests, canAccess, startCheckout]);
 
   const handleExportPlaceCards = useCallback(() => {
     setExporting(true);

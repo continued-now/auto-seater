@@ -997,6 +997,37 @@ function TableGroup({
           listening={false}
         />
       )}
+
+      {/* Standing capacity badge */}
+      {(table.standingCapacity ?? 0) > 0 && (
+        <>
+          <Rect
+            x={-20}
+            y={table.height / 2 + 16}
+            width={40}
+            height={14}
+            cornerRadius={7}
+            fill="#f1f5f9"
+            stroke="#94a3b8"
+            strokeWidth={0.5}
+            listening={false}
+          />
+          <Text
+            text={`+${table.standingCapacity}`}
+            fontSize={9}
+            fontFamily="system-ui, sans-serif"
+            fontStyle="500"
+            fill="#64748b"
+            align="center"
+            verticalAlign="middle"
+            width={40}
+            height={14}
+            x={-20}
+            y={table.height / 2 + 16}
+            listening={false}
+          />
+        </>
+      )}
     </Group>
   );
 }
@@ -1011,6 +1042,7 @@ const MemoTableGroup = memo(TableGroup, (prev, next) =>
   prev.table.shape === next.table.shape &&
   prev.table.label === next.table.label &&
   prev.table.capacity === next.table.capacity &&
+  prev.table.standingCapacity === next.table.standingCapacity &&
   prev.table.seatingSide === next.table.seatingSide &&
   prev.table.endSeats === next.table.endSeats &&
   prev.table.assignedGuestIds === next.table.assignedGuestIds &&

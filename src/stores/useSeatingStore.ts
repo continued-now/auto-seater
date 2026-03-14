@@ -188,6 +188,8 @@ export interface SeatingState {
   loadSnapshot: (snapshot: { guests: Guest[]; households: Household[]; socialCircles: SocialCircle[]; venue: VenueConfig; constraints: Constraint[]; templates: VenueTemplate[] }) => void;
 
   // Demo actions
+  isDemoMinimized: boolean;
+  toggleDemoMinimized: () => void;
   startDemo: () => void;
   exitDemo: () => void;
   advanceDemoStep: () => void;
@@ -230,6 +232,7 @@ export const useSeatingStore = create<SeatingState>()(
 
         // Demo mode
         isDemoMode: false,
+        isDemoMinimized: false,
         demoStep: 0,
         _preDemoSnapshot: null,
 
@@ -1356,6 +1359,12 @@ export const useSeatingStore = create<SeatingState>()(
         },
 
         // Demo actions
+        toggleDemoMinimized: () => {
+          set((state) => {
+            state.isDemoMinimized = !state.isDemoMinimized;
+          });
+        },
+
         startDemo: () => {
           const current = get();
           const snapshot: PreDemoSnapshot = {
@@ -1379,6 +1388,7 @@ export const useSeatingStore = create<SeatingState>()(
             state.venue = demo.venue as VenueConfig;
             state.constraints = demo.constraints as Constraint[];
             state.isDemoMode = true;
+            state.isDemoMinimized = false;
             state.demoStep = 0;
             state.currentStep = 'guests';
             state.selectedGuestIds = [];
@@ -1406,6 +1416,7 @@ export const useSeatingStore = create<SeatingState>()(
               state.lastSavedAt = snapshot.lastSavedAt;
             }
             state.isDemoMode = false;
+            state.isDemoMinimized = false;
             state.demoStep = 0;
             state._preDemoSnapshot = null;
             state.selectedGuestIds = [];
@@ -1489,7 +1500,7 @@ export const useSeatingStore = create<SeatingState>()(
         // zundo temporal config — exclude UI state from undo/redo
         limit: 100,
         partialize: (state) => {
-          const { currentStep, eventDate, eventName, currentEventId, selectedGuestIds, selectedTableId, selectedElementId, selectedElementType, selectedRoomId, canvasToolMode, activeTemplateId, searchQuery, checkInSearchQuery, zoom, panOffset, lastSavedAt, userTier, isDemoMode, demoStep, _preDemoSnapshot, seatingFilterTab, ...rest } = state;
+          const { currentStep, eventDate, eventName, currentEventId, selectedGuestIds, selectedTableId, selectedElementId, selectedElementType, selectedRoomId, canvasToolMode, activeTemplateId, searchQuery, checkInSearchQuery, zoom, panOffset, lastSavedAt, userTier, isDemoMode, isDemoMinimized, demoStep, _preDemoSnapshot, seatingFilterTab, ...rest } = state;
           return rest;
         },
       }

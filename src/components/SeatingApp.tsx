@@ -6,6 +6,7 @@ import { Header } from './Header';
 import { StepNavigation } from './StepNavigation';
 import { DemoOverlay } from './demo/DemoOverlay';
 import { DemoInteractionBlocker } from './demo/DemoInteractionBlocker';
+import { EmailCaptureBanner } from './EmailCaptureBanner';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { usePurchase } from '@/hooks/usePurchase';
@@ -117,6 +118,20 @@ export function SeatingApp() {
   const { justUpgraded } = usePurchase();
   const currentStep = useSeatingStore((s) => s.currentStep);
   const isDemoMode = useSeatingStore((s) => s.isDemoMode);
+  const guests = useSeatingStore((s) => s.guests);
+  const startDemo = useSeatingStore((s) => s.startDemo);
+
+  // Auto-start demo if ?demo=true query param present
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('demo') === 'true') {
+      startDemo();
+      const url = new URL(window.location.href);
+      url.searchParams.delete('demo');
+      window.history.replaceState({}, '', url.pathname + url.search);
+    }
+  }, [startDemo]);
 
   // Toast on successful upgrade (session verified from Stripe redirect)
   useEffect(() => {
@@ -155,6 +170,7 @@ export function SeatingApp() {
         {currentStep === 'check-in' && isDemoMode && <CheckInStep />}
       </main>
       <DemoOverlay />
+      <EmailCaptureBanner show={guests.length >= 10} />
     </div>
   );
 }
