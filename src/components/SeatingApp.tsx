@@ -5,7 +5,6 @@ import { toast } from 'sonner';
 import { Header } from './Header';
 import { StepNavigation } from './StepNavigation';
 import { DemoOverlay } from './demo/DemoOverlay';
-import { DemoInteractionBlocker } from './demo/DemoInteractionBlocker';
 import { EmailCaptureBanner } from './EmailCaptureBanner';
 import { useSeatingStore } from '@/stores/useSeatingStore';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
@@ -163,7 +162,6 @@ export function SeatingApp() {
       <Header />
       <StepNavigation />
       <main className="flex-1 overflow-hidden relative">
-        <DemoInteractionBlocker />
         {currentStep === 'guests' && <GuestListStep />}
         {currentStep === 'venue' && <VenueSetupStep />}
         {currentStep === 'seating' && <SeatingStep />}
